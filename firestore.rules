@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /sessions/{sessionId} {
+      // sessions 文件本身（含 hostToken）完全禁止前端讀寫
+      // 只能由後端 Admin SDK 存取（不受 Security Rules 限制）
+      allow read, write: if false;
+
+      // 投影控制文件（displayMode 等），前端唯讀，後端 Admin SDK 寫入
+      match /_ctrl/{docId} {
+        allow read: if true;
+        allow write: if false;
+      }
+
+      match /questions/{questionId} {
+        // 前端只能讀題目（大螢幕 onSnapshot 用），不能寫
+        allow read: if true;
+        allow write: if false;
+
+        match /answers/{answerId} {
+          // 答案完全不允許前端直接讀寫，必須經過 Express API
+          allow read, write: if false;
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,253 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useParams, useSearchParams } from 'react-router-dom';
+import { useLiveQuestion } from '../hooks/useLiveQuestion';
+import { ResultChart } from '../components/ResultChart';
+import { TextAnswerWall } from '../components/TextAnswerWall';
+import { ThreeMapScene } from '../components/ThreeMapScene';
+import { ThreeMapSceneHUD } from '../components/ThreeMapSceneHUD';
+import { SpotlightScene } from '../components/SpotlightScene';
+import { MagicWordCloudScene } from '../components/MagicWordCloudScene';
+
+export function DisplayPage() {
+  const { sessionId } = useParams<{ sessionId: string }>();
+  const [searchParams] = useSearchParams();
+  const { question, loading, error, connected } = useLiveQuestion(sessionId ?? '');
+  const [projectorMode, setProjectorMode] = useState(searchParams.get('mode') === 'projector');
+  const containerRef = useRef<HTMLDivElement>(null);
+  const joinUrl = sessionId ? `${window.location.origin}/join/${sessionId}` : '';
+
+  const handleFullscreenChange = useCallback(() => {
+    const fullscreenElement = document.fullscreenElement;
+    if (!fullscreenElement) {
+      setProjectorMode(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, [handleFullscreenChange]);
+
+  const enterProjectorMode = async () => {
+    setProjectorMode(true);
+    if (!document.fullscreenElement) {
+      try {
+        await containerRef.current?.requestFullscreen();
+      } catch (err) {
+        console.warn('Fullscreen request rejected', err);
+      }
+    }
+  };
+
+  const exitProjectorMode = async () => {
+    setProjectorMode(false);
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+    }
+  };
+
+  const derivedScene = (() => {
+    const forced = searchParams.get('scene');
+    if (forced) {
+      return forced === 'map-church' ? 'text-wall' : forced;
+    }
+    if (question?.displayScene) {
+      return question.displayScene;
+    }
+    if (question?.type === 'TEXT') {
+      return 'text-wall';
+    }
+    return 'default';
+  })();
+  const isSpotlightScene = question?.type === 'TEXT' && derivedScene === 'spotlight';
+  const isWordCloudScene = question?.type === 'TEXT' && derivedScene === 'word-cloud';
+  const isMapScene = question?.type !== 'TEXT' && derivedScene === 'map3d';
+  const isMapHudScene = question?.type !== 'TEXT' && derivedScene === 'map3d-hud';
+  const showAnswers = question?.displayMode === 'results';
+  const showQuestionQr = Boolean(question && !showAnswers);
+  const hideHeaderChrome = projectorMode;
+  const qrCodeUrl = joinUrl
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=360x360&data=${encodeURIComponent(joinUrl)}`
+    : '';
+
+  return (
+    <div
+      ref={containerRef}
+      className={`min-h-screen bg-gray-950 text-white flex flex-col transition-colors ${projectorMode ? 'projector-mode' : ''}`}
+    >
+      {!showQuestionQr && (
+        <div
+          className={`relative flex items-center gap-6 px-8 border-b border-gray-800 transition-all duration-300 ${
+            projectorMode ? 'min-h-[132px] py-5' : 'py-4'
+          }`}
+        >
+          {projectorMode && question && qrCodeUrl && (
+            <div className="absolute left-8 top-1/2 -translate-y-1/2 flex items-center gap-3">
+              <div className="bg-white rounded-xl p-2 shadow-2xl">
+                <img
+                  src={qrCodeUrl}
+                  alt="填寫答案 QR Code"
+                  className="w-[88px] h-[88px] object-contain"
+                />
+              </div>
+              <div className="hidden lg:block text-left">
+                <p className="text-xs uppercase tracking-[0.3em] text-green-300/80">填寫答案</p>
+              </div>
+            </div>
+          )}
+          <div className={`flex items-center gap-3 ${hideHeaderChrome ? 'opacity-0 pointer-events-none' : ''}`}>
+            <span className="text-gray-400 text-sm font-medium">PreEvent Live</span>
+            <div className="flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+              <span className="text-xs text-gray-500">{connected ? '即時連線中' : '連線中斷'}</span>
+            </div>
+          </div>
+          <div className="flex-1 text-center overflow-hidden">
+            {projectorMode && question ? (
+              <>
+                <div className="absolute right-8 top-4">
+                  <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.4em] text-green-300/80">
+                    <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                    作答開放中
+                  </div>
+                </div>
+                <h2 className="mx-auto max-w-[min(60vw,900px)] text-2xl md:text-3xl font-semibold text-white leading-tight text-center">
+                  {question.title}
+                </h2>
+              </>
+            ) : (
+              <span className="text-sm text-gray-500">PreEvent Live</span>
+            )}
+          </div>
+          <div className={`flex items-center gap-3 ${hideHeaderChrome ? 'opacity-0 pointer-events-none' : ''}`}>
+            <span className="text-gray-500 text-xs font-mono">{sessionId}</span>
+            <div className="flex gap-2">
+              {!projectorMode ? (
+                <button
+                  onClick={enterProjectorMode}
+                  className="px-3 py-1.5 text-xs uppercase tracking-widest border border-white/20 rounded-full text-white/70 hover:text-white"
+                >
+                  投影模式
+                </button>
+              ) : (
+                <button
+                  onClick={exitProjectorMode}
+                  className="px-3 py-1.5 text-xs uppercase tracking-widest border border-white/20 rounded-full text-white/70 hover:text-white"
+                >
+                  離開投影
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Main content */}
+      <div className={`flex-1 ${showAnswers && (isSpotlightScene || isWordCloudScene || isMapScene || isMapHudScene) ? 'relative overflow-hidden' : 'flex items-center justify-center px-8 py-12'}`}>
+        {loading && (
+          <div className="text-center text-gray-500">
+            <div className="w-12 h-12 border-4 border-gray-700 border-t-indigo-500 rounded-full animate-spin mx-auto mb-4" />
+            <p>連線中...</p>
+          </div>
+        )}
+
+        {!loading && error && (
+          <div className="text-center text-red-400">
+            <p className="text-5xl mb-4">⚠️</p>
+            <p className="text-xl font-medium">連線發生錯誤</p>
+            <p className="text-sm text-red-500 mt-2">{error.message}</p>
+            <p className="text-xs text-gray-600 mt-4">Firebase SDK 將自動重新連線</p>
+          </div>
+        )}
+
+        {!loading && !error && !question && (
+          <div className="text-center text-gray-200">
+            <p className="text-4xl md:text-5xl font-bold text-white">待主持人開啟題目</p>
+          </div>
+        )}
+
+        {!loading && !error && question && !showAnswers && (
+          <div className="text-center text-gray-200">
+            <p className="text-sm uppercase tracking-[0.35em] text-green-300/80 mb-5">開始作答</p>
+            <h1 className="text-4xl md:text-6xl font-black text-white leading-tight max-w-5xl">
+              {question.title}
+            </h1>
+            <p className="mt-5 text-lg text-gray-500">掃描 QR Code 填寫答案</p>
+            <div className="mt-10 inline-flex flex-col items-center bg-white/5 border border-white/10 rounded-3xl p-6 shadow-lg">
+              <div className="bg-white rounded-2xl p-4 shadow-2xl">
+                <img
+                  src={qrCodeUrl}
+                  alt="填寫答案 QR Code"
+                  className="w-[280px] h-[280px] md:w-[340px] md:h-[340px] object-contain"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!loading && !error && question && showAnswers && (
+          isSpotlightScene ? (
+            <div className="absolute inset-0">
+              <SpotlightScene
+                sessionId={sessionId ?? ''}
+                questionId={question.id}
+                fallbackTexts={question.recentTexts}
+              />
+            </div>
+          ) : isWordCloudScene ? (
+            <div className="absolute inset-0">
+              <MagicWordCloudScene
+                texts={question.recentTexts}
+                totalResponses={question.totalResponses}
+              />
+            </div>
+          ) : isMapScene ? (
+            <div className="absolute inset-0">
+              <ThreeMapScene options={question.options} sessionId={sessionId ?? ''} />
+            </div>
+          ) : isMapHudScene ? (
+            <div className="absolute inset-0">
+              <ThreeMapSceneHUD options={question.options} sessionId={sessionId ?? ''} />
+            </div>
+          ) : (
+            <div className="w-full max-w-4xl">
+            {/* ── Results view: show chart / scene ── */}
+            {question.type !== 'TEXT' ? (
+              <div className="bg-gray-900 rounded-3xl p-8 border border-gray-800">
+                {question.totalResponses === 0 ? (
+                  <div className="text-center py-8 text-gray-600">
+                    <p className="text-lg">等待第一份答案...</p>
+                  </div>
+                ) : (
+                  <ResultChart
+                    options={question.options}
+                    totalResponses={question.totalResponses}
+                  />
+                )}
+              </div>
+            ) : (
+              <div className="bg-gray-900 rounded-3xl p-8 border border-gray-800">
+                <TextAnswerWall
+                  texts={question.recentTexts}
+                  totalResponses={question.totalResponses}
+                />
+              </div>
+            )}
+
+            {/* Stats footer */}
+            <div className="mt-4 text-center text-gray-600 text-sm">
+              {question.type !== 'TEXT' ? (
+                <p>
+                  {question.type === 'SINGLE_CHOICE' ? '單選題' : '多選題'} · 共 {question.totalResponses} 人作答
+                </p>
+              ) : derivedScene !== 'spotlight' && (
+                <p>文字題 · 共 {question.totalResponses} 人作答</p>
+              )}
+            </div>
+          </div>
+          )
+        )}
+      </div>
+    </div>
+  );
+}

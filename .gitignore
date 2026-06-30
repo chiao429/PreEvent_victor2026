@@ -1,3 +1,12 @@
+# Firebase Service Account Keys (NEVER commit these)
+*firebase-adminsdk*.json
+*serviceaccount*.json
+*service-account*.json
+
+# macOS
+.DS_Store
+**/.DS_Store
+
 # Logs
 logs
 *.log

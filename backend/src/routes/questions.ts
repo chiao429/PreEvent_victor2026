@@ -1,0 +1,384 @@
+import { Router, Request, Response } from 'express';
+import { v4 as uuidv4 } from 'uuid';
+import { z } from 'zod';
+import { db, FieldValue } from '../lib/firebaseAdmin';
+import { requireHostToken } from '../middleware/auth';
+import type { DisplayScene, QuestionOption, QuestionType } from '../types';
+import { resetQuestionAnswers } from '../utils/resetAnswers';
+
+export const questionRouter = Router();
+
+const DISPLAY_SCENE_VALUES = ['default', 'map3d', 'map3d-hud', 'text-wall', 'spotlight', 'word-cloud'] as const;
+const TEXT_SCENES: DisplayScene[] = ['text-wall', 'spotlight', 'word-cloud'];
+const CHOICE_SCENES: DisplayScene[] = ['default', 'map3d', 'map3d-hud'];
+
+const createQuestionSchema = z.object({
+  type: z.enum(['SINGLE_CHOICE', 'MULTI_CHOICE', 'TEXT']),
+  title: z.string().min(1).max(500),
+  options: z.array(z.string().min(1).max(200)).optional(),
+  displayScene: z.enum(DISPLAY_SCENE_VALUES).optional(),
+});
+
+const patchQuestionSchema = z.object({
+  status: z.enum(['DRAFT', 'OPEN', 'CLOSED']),
+});
+
+function mergeOptions(
+  options: QuestionOption[],
+  optionCounts: Record<string, number>,
+) {
+  return options.map((opt) => ({
+    id: opt.id,
+    label: opt.label,
+    count: optionCounts?.[opt.id] ?? 0,
+  }));
+}
+
+function isSceneAllowed(type: QuestionType, scene: DisplayScene): boolean {
+  return (type === 'TEXT' ? TEXT_SCENES : CHOICE_SCENES).includes(scene);
+}
+
+function normalizeScene(type: QuestionType, scene?: string | null): DisplayScene {
+  const fallback: DisplayScene = type === 'TEXT' ? 'text-wall' : 'default';
+  if (!scene) return fallback;
+  const sanitized = scene === 'map-church' ? 'text-wall' : scene;
+  if ((DISPLAY_SCENE_VALUES as readonly string[]).includes(sanitized)) {
+    const casted = sanitized as DisplayScene;
+    return isSceneAllowed(type, casted) ? casted : fallback;
+  }
+  return fallback;
+}
+
+// GET /api/sessions/:id/questions — 取得所有題目（主持人用）
+questionRouter.get('/:id/questions', requireHostToken, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const snapshot = await db
+      .collection('sessions').doc(req.params.id)
+      .collection('questions')
+      .orderBy('order')
+      .get();
+
+    const questions = snapshot.docs.map((doc) => {
+      const data = doc.data();
+      const displayScene = normalizeScene(data.type, data.displayScene as string | undefined);
+      return {
+        questionId: doc.id,
+        type: data.type,
+        title: data.title,
+        status: data.status,
+        order: data.order,
+        options: mergeOptions(data.options || [], data.optionCounts || {}),
+        totalResponses: data.totalResponses,
+        displayScene,
+        displayMode: (data.displayMode as 'question' | 'results' | undefined) ?? 'question',
+      };
+    });
+
+    res.json({ questions });
+  } catch (err) {
+    console.error('[questions] list error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/sessions/:id/questions/current — 取得目前 OPEN 的題目（觀眾用）
+// 必須定義在 /:id/questions/:qid 之前，避免 'current' 被視為 qid
+questionRouter.get('/:id/questions/current', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const snapshot = await db
+      .collection('sessions').doc(req.params.id)
+      .collection('questions')
+      .where('status', '==', 'OPEN')
+      .limit(1)
+      .get();
+
+    if (snapshot.empty) {
+      res.status(404).json({ error: 'No open question found' });
+      return;
+    }
+
+    const doc = snapshot.docs[0];
+    const data = doc.data();
+    const displayScene = normalizeScene(data.type, data.displayScene as string | undefined);
+
+    res.json({
+      questionId: doc.id,
+      type: data.type,
+      title: data.title,
+      status: data.status,
+      order: data.order,
+      options: mergeOptions(data.options || [], data.optionCounts || {}),
+      totalResponses: data.totalResponses,
+      displayScene,
+      displayMode: (data.displayMode as 'question' | 'results' | undefined) ?? 'question',
+    });
+  } catch (err) {
+    console.error('[questions] current error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/sessions/:id/questions/:qid/results — 主持人取得統計結果
+questionRouter.get('/:id/questions/:qid/results', requireHostToken, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const doc = await db
+      .collection('sessions').doc(req.params.id)
+      .collection('questions').doc(req.params.qid)
+      .get();
+
+    if (!doc.exists) {
+      res.status(404).json({ error: 'Question not found' });
+      return;
+    }
+
+    const data = doc.data()!;
+    const displayScene = normalizeScene(data.type, data.displayScene as string | undefined);
+    res.json({
+      questionId: doc.id,
+      type: data.type,
+      title: data.title,
+      status: data.status,
+      options: mergeOptions(data.options || [], data.optionCounts || {}),
+      totalResponses: data.totalResponses,
+      displayScene,
+      displayMode: (data.displayMode as 'question' | 'results' | undefined) ?? 'question',
+    });
+  } catch (err) {
+    console.error('[questions] results error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/sessions/:id/questions — 主持人建立新題目
+questionRouter.post('/:id/questions', requireHostToken, async (req: Request, res: Response): Promise<void> => {
+  const parsed = createQuestionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+
+  const { type, title, options: rawOptions, displayScene: requestedScene } = parsed.data;
+
+  if (type !== 'TEXT' && (!rawOptions || rawOptions.length < 2)) {
+    res.status(400).json({ error: 'Choice questions require at least 2 options' });
+    return;
+  }
+
+  const desiredScene: DisplayScene = requestedScene ?? (type === 'TEXT' ? 'text-wall' : 'default');
+  if (!isSceneAllowed(type, desiredScene)) {
+    res.status(400).json({ error: 'Selected display scene is not compatible with this question type' });
+    return;
+  }
+
+  try {
+    const questionsRef = db
+      .collection('sessions').doc(req.params.id)
+      .collection('questions');
+
+    const existingSnap = await questionsRef.get();
+    const order = existingSnap.size;
+    const questionId = uuidv4();
+
+    const options: QuestionOption[] = type !== 'TEXT'
+      ? (rawOptions ?? []).map((label, idx) => ({
+          id: `opt_${idx}_${uuidv4().slice(0, 8)}`,
+          label,
+        }))
+      : [];
+
+    const optionCounts: Record<string, number> = {};
+    options.forEach((opt) => { optionCounts[opt.id] = 0; });
+
+    await questionsRef.doc(questionId).set({
+      type,
+      title,
+      status: 'DRAFT',
+      order,
+      options,
+      optionCounts,
+      totalResponses: 0,
+      createdAt: FieldValue.serverTimestamp(),
+      displayScene: desiredScene,
+    });
+
+    res.status(201).json({
+      questionId,
+      type,
+      title,
+      status: 'DRAFT',
+      order,
+      options: options.map((opt) => ({ ...opt, count: 0 })),
+      totalResponses: 0,
+      displayScene: desiredScene,
+    });
+  } catch (err) {
+    console.error('[questions] create error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+const updateQuestionBodySchema = z.object({
+  title: z.string().min(1).max(500).optional(),
+  displayScene: z.enum(DISPLAY_SCENE_VALUES).optional(),
+  optionLabels: z.record(z.string().min(1).max(200)).optional(),
+  optionCounts: z.record(z.number().int().min(0)).optional(),
+});
+
+// PUT /api/sessions/:id/questions/:qid — 主持人編輯已關閉題目的內容
+questionRouter.put('/:id/questions/:qid', requireHostToken, async (req: Request, res: Response): Promise<void> => {
+  const parsed = updateQuestionBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const questionRef = db
+      .collection('sessions').doc(req.params.id)
+      .collection('questions').doc(req.params.qid);
+
+    const docSnap = await questionRef.get();
+    if (!docSnap.exists) {
+      res.status(404).json({ error: 'Question not found' });
+      return;
+    }
+
+    const data = docSnap.data()!;
+    if (data.status === 'OPEN') {
+      res.status(409).json({ error: 'Cannot edit a question while it is OPEN' });
+      return;
+    }
+
+    const { title, displayScene, optionLabels, optionCounts } = parsed.data;
+    const updates: Record<string, unknown> = {};
+
+    if (title !== undefined) updates.title = title;
+
+    if (displayScene !== undefined) {
+      if (!isSceneAllowed(data.type as QuestionType, displayScene)) {
+        res.status(400).json({ error: 'Display scene not compatible with question type' });
+        return;
+      }
+      updates.displayScene = displayScene;
+    }
+
+    if (optionLabels && data.type !== 'TEXT') {
+      updates.options = (data.options as QuestionOption[]).map((opt) => ({
+        id: opt.id,
+        label: optionLabels[opt.id] ?? opt.label,
+      }));
+    }
+
+    if (optionCounts && data.type !== 'TEXT') {
+      const merged: Record<string, number> = { ...(data.optionCounts as Record<string, number> ?? {}) };
+      Object.entries(optionCounts).forEach(([id, count]) => { merged[id] = count; });
+      updates.optionCounts = merged;
+      updates.totalResponses = Object.values(merged).reduce((s, c) => s + c, 0);
+    }
+
+    await questionRef.update(updates);
+    res.json({ questionId: req.params.qid, updated: true });
+  } catch (err) {
+    console.error('[questions] update error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// DELETE /api/sessions/:id/questions/:qid — 主持人刪除尚未作答的題目
+questionRouter.delete('/:id/questions/:qid', requireHostToken, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const questionRef = db
+      .collection('sessions').doc(req.params.id)
+      .collection('questions').doc(req.params.qid);
+
+    const docSnap = await questionRef.get();
+    if (!docSnap.exists) {
+      res.status(404).json({ error: 'Question not found' });
+      return;
+    }
+
+    const data = docSnap.data()!;
+    if ((data.totalResponses as number) > 0) {
+      res.status(409).json({ error: 'Cannot delete a question that already has responses' });
+      return;
+    }
+
+    await questionRef.delete();
+    res.json({ success: true, questionId: req.params.qid });
+  } catch (err) {
+    console.error('[questions] delete error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/sessions/:id/questions/:qid/reset-answers — 清空單題作答資料
+questionRouter.post('/:id/questions/:qid/reset-answers', requireHostToken, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const questionRef = db
+      .collection('sessions').doc(req.params.id)
+      .collection('questions').doc(req.params.qid);
+
+    const docSnap = await questionRef.get();
+    if (!docSnap.exists) {
+      res.status(404).json({ error: 'Question not found' });
+      return;
+    }
+
+    const data = docSnap.data()!;
+    const options = (data.options as QuestionOption[] | undefined) ?? [];
+    await resetQuestionAnswers(questionRef, options);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[questions] reset answers error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// PATCH /api/sessions/:id/questions/:qid — 主持人修改題目狀態
+questionRouter.patch('/:id/questions/:qid', requireHostToken, async (req: Request, res: Response): Promise<void> => {
+  const parsed = patchQuestionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+
+  const { status } = parsed.data;
+
+  try {
+    const sessionRef = db.collection('sessions').doc(req.params.id);
+    const questionRef = sessionRef.collection('questions').doc(req.params.qid);
+
+    const questionDoc = await questionRef.get();
+    if (!questionDoc.exists) {
+      res.status(404).json({ error: 'Question not found' });
+      return;
+    }
+
+    if (status === 'OPEN') {
+      // 先關閉其他已開啟的題目，確保同時只有一題是 OPEN
+      const openSnap = await sessionRef
+        .collection('questions')
+        .where('status', '==', 'OPEN')
+        .get();
+
+      const batch = db.batch();
+      openSnap.docs.forEach((doc) => {
+        if (doc.id !== req.params.qid) {
+          batch.update(doc.ref, { status: 'CLOSED' });
+        }
+      });
+      batch.update(questionRef, { status, displayMode: 'question' });
+      batch.set(sessionRef.collection('_ctrl').doc('display'), { displayMode: 'question' }, { merge: true });
+      batch.update(sessionRef, { displayMode: 'question' });
+      await batch.commit();
+    } else {
+      await questionRef.update({ status });
+    }
+
+    res.json({ questionId: req.params.qid, status });
+  } catch (err) {
+    console.error('[questions] patch error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
