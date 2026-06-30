@@ -409,39 +409,6 @@ export function HostPage() {
   const joinUrl = `${window.location.origin}/join/${sessionId}`;
   const displayUrl = `${window.location.origin}/display/${sessionId}`;
 
-  function handleExport() {
-    if (!session) return;
-    const SCENE_LABEL_MAP: Record<string, string> = {
-      default: '標準長條圖',
-      'text-wall': '文字牆',
-      spotlight: '聚光燈文字',
-      'word-cloud': '魔幻星空 Word Cloud',
-      'map3d-hud': '3D 地圖 HUD',
-    };
-    const data = {
-      場次名稱: session.name,
-      場次ID: sessionId,
-      匯出時間: new Date().toLocaleString('zh-TW'),
-      題目: questions.map((q) => ({
-        題目: q.title,
-        類型: q.type === 'SINGLE_CHOICE' ? '單選' : q.type === 'MULTI_CHOICE' ? '多選' : '文字',
-        狀態: q.status === 'OPEN' ? '作答中' : q.status === 'CLOSED' ? '已關閉' : '草稿',
-        投影場景: SCENE_LABEL_MAP[q.displayScene ?? 'default'] ?? q.displayScene,
-        總回答數: q.totalResponses,
-        選項: q.type !== 'TEXT'
-          ? q.options.map((opt) => ({ 選項: opt.label, 票數: opt.count }))
-          : undefined,
-      })),
-    };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `preevent-${sessionId?.slice(0, 8)}-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -542,13 +509,6 @@ export function HostPage() {
             >
               大螢幕 ↗
             </a>
-            <button
-              onClick={handleExport}
-              disabled={questions.length === 0}
-              className="px-3 py-1.5 bg-teal-50 text-teal-700 rounded-lg border border-teal-200 hover:bg-teal-100 disabled:opacity-40 transition-colors"
-            >
-              ↓ 儲存資料
-            </button>
             <button
               onClick={handleResetSession}
               disabled={resettingSession || questions.length === 0}
