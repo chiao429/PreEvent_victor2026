@@ -2,6 +2,8 @@
 *firebase-adminsdk*.json
 *serviceaccount*.json
 *service-account*.json
+*-firebase-adminsdk-*.json
+preevent-victor-2026-*.json
 
 # macOS
 .DS_Store
