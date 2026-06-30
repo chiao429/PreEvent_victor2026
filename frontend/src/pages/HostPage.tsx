@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { listQuestions, createQuestion, updateQuestion, updateQuestionStatus, getSession, seedAnswers, deleteQuestion, clearQuestionAnswers, resetSessionAnswers, updateSessionName, setDisplayMode, runQuestionLoadTest } from '../api/client';
+import { listQuestions, createQuestion, updateQuestion, updateQuestionStatus, getSession, deleteQuestion, clearQuestionAnswers, resetSessionAnswers, updateSessionName, setDisplayMode } from '../api/client';
+import { sendSimulationCommand } from '../api/simulationWs';
 import { QuestionEditor } from '../components/QuestionEditor';
 import { ResultChart } from '../components/ResultChart';
 import { updateStoredSessionName } from './HomePage';
@@ -241,9 +242,13 @@ export function HostPage() {
     if (!window.confirm(`確定要對「${question.title}」模擬 500 人同秒作答嗎？`)) return;
     setLoadTestingQuestionId(question.questionId);
     try {
-      const result = await runQuestionLoadTest(sessionId, question.questionId, hostToken);
-      alert(`已送入 ${result.inserted} 筆壓測作答`);
-      await fetchQuestions();
+      const result = await sendSimulationCommand(sessionId, hostToken, {
+        type: 'load_test_answers',
+        questionId: question.questionId,
+        questionType: question.type,
+        options: question.options.map((option) => ({ id: option.id, label: option.label })),
+      });
+      alert(`已送入 ${result.inserted} 筆畫面模擬作答`);
     } catch (err) {
       alert(err instanceof Error ? err.message : '壓測失敗');
     } finally {
@@ -356,14 +361,18 @@ export function HostPage() {
     setSeedProgress({ done: 0, total: payloads.length });
     try {
       for (let i = 0; i < payloads.length; i += 1) {
-        await seedAnswers(sessionId, seedTarget.questionId, hostToken, payloads[i]);
+        await sendSimulationCommand(sessionId, hostToken, {
+          type: 'seed_answers',
+          questionId: seedTarget.questionId,
+          questionType: seedTarget.type,
+          ...payloads[i],
+        });
         setSeedProgress({ done: i + 1, total: payloads.length });
         await wait(300);
       }
       setSeedTarget(null);
       setSeedText('');
       setSeedCounts({});
-      await fetchQuestions();
     } catch (err) {
       setSeedError(err instanceof Error ? err.message : '灌入失敗');
     } finally {
