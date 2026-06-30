@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useLiveQuestion } from '../hooks/useLiveQuestion';
+import { useSimulationOverlay } from '../hooks/useSimulationOverlay';
 import { ResultChart } from '../components/ResultChart';
 import { TextAnswerWall } from '../components/TextAnswerWall';
 import { ThreeMapScene } from '../components/ThreeMapScene';
@@ -12,6 +13,7 @@ export function DisplayPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [searchParams] = useSearchParams();
   const { question, loading, error, connected } = useLiveQuestion(sessionId ?? '');
+  const simulationOverlays = useSimulationOverlay(sessionId ?? '');
   const [projectorMode, setProjectorMode] = useState(searchParams.get('mode') === 'projector');
   const [revealedCounts, setRevealedCounts] = useState<Record<string, number>>({});
   const [revealedTotalResponses, setRevealedTotalResponses] = useState(0);
@@ -67,27 +69,43 @@ export function DisplayPage() {
   const isMapScene = question?.type !== 'TEXT' && derivedScene === 'map3d';
   const isMapHudScene = question?.type !== 'TEXT' && derivedScene === 'map3d-hud';
   const showAnswers = question?.displayMode === 'results';
+  const simulationOverlay = question ? simulationOverlays[question.id] : undefined;
+  const targetOptions = useMemo(() => (
+    question?.options.map((option) => ({
+      ...option,
+      count: option.count + (simulationOverlay?.optionCounts[option.id] ?? 0),
+    })) ?? []
+  ), [question?.options, simulationOverlay?.optionCounts]);
+  const targetRecentTexts = useMemo(() => (
+    question
+      ? [...question.recentTexts, ...(simulationOverlay?.recentTexts ?? [])].slice(-200)
+      : []
+  ), [question, simulationOverlay?.recentTexts]);
+  const targetTotalResponses = question
+    ? question.totalResponses + (simulationOverlay?.totalResponses ?? 0)
+    : 0;
   const revealTargetSignature = useMemo(() => {
     if (!question || !showAnswers) return '';
     return JSON.stringify({
       id: question.id,
-      options: question.options.map((option) => [option.id, option.count]),
-      recentTexts: question.recentTexts.length,
-      totalResponses: question.totalResponses,
+      options: targetOptions.map((option) => [option.id, option.count]),
+      recentTexts: targetRecentTexts.length,
+      totalResponses: targetTotalResponses,
     });
-  }, [question, showAnswers]);
+  }, [question, showAnswers, targetOptions, targetRecentTexts.length, targetTotalResponses]);
   const displayedOptions = useMemo(() => (
-    question?.options.map((option) => ({
+    targetOptions.map((option) => ({
       ...option,
       count: showAnswers ? (revealedCounts[option.id] ?? 0) : 0,
-    })) ?? []
-  ), [question?.options, revealedCounts, showAnswers]);
+    }))
+  ), [targetOptions, revealedCounts, showAnswers]);
   const displayedRecentTexts = useMemo(() => (
-    showAnswers ? (question?.recentTexts ?? []).slice(0, revealedTextCount) : []
-  ), [question?.recentTexts, revealedTextCount, showAnswers]);
+    showAnswers ? targetRecentTexts.slice(0, revealedTextCount) : []
+  ), [targetRecentTexts, revealedTextCount, showAnswers]);
   const displayedTotalResponses = showAnswers ? revealedTotalResponses : 0;
   const showQuestionQr = Boolean(question && !showAnswers);
   const hideHeaderChrome = projectorMode;
+  const projectorHeaderQuestion = projectorMode ? question : null;
   const qrCodeUrl = joinUrl
     ? `https://api.qrserver.com/v1/create-qr-code/?size=360x360&data=${encodeURIComponent(joinUrl)}`
     : '';
@@ -102,29 +120,29 @@ export function DisplayPage() {
 
     setRevealedCounts((current) => {
       const next: Record<string, number> = {};
-      question.options.forEach((option) => {
+      targetOptions.forEach((option) => {
         next[option.id] = Math.min(current[option.id] ?? 0, option.count);
       });
       return next;
     });
-    setRevealedTotalResponses((current) => Math.min(current, question.totalResponses));
-    setRevealedTextCount((current) => Math.min(current, question.recentTexts.length));
+    setRevealedTotalResponses((current) => Math.min(current, targetTotalResponses));
+    setRevealedTextCount((current) => Math.min(current, targetRecentTexts.length));
 
     const interval = window.setInterval(() => {
       setRevealedCounts((current) => {
         const next = { ...current };
-        const target = question.options.find((option) => (next[option.id] ?? 0) < option.count);
+        const target = targetOptions.find((option) => (next[option.id] ?? 0) < option.count);
         if (target) {
           next[target.id] = (next[target.id] ?? 0) + 1;
         }
         return next;
       });
-      setRevealedTotalResponses((current) => Math.min(current + 1, question.totalResponses));
-      setRevealedTextCount((current) => Math.min(current + 1, question.recentTexts.length));
+      setRevealedTotalResponses((current) => Math.min(current + 1, targetTotalResponses));
+      setRevealedTextCount((current) => Math.min(current + 1, targetRecentTexts.length));
     }, 180);
 
     return () => window.clearInterval(interval);
-  }, [question, revealTargetSignature, showAnswers]);
+  }, [question, revealTargetSignature, showAnswers, targetOptions, targetRecentTexts.length, targetTotalResponses]);
 
   return (
     <div
@@ -133,62 +151,62 @@ export function DisplayPage() {
     >
       {!showQuestionQr && (
         <div
-          className={`relative flex items-center gap-6 px-8 border-b border-gray-800 transition-all duration-300 ${
-            projectorMode ? 'min-h-[132px] py-5' : 'py-4'
+          className={`grid grid-cols-[minmax(190px,24vw)_minmax(0,1fr)_minmax(190px,24vw)] items-center gap-4 px-6 sm:px-8 border-b border-gray-800 transition-all duration-300 ${
+            projectorHeaderQuestion ? 'min-h-[132px] py-4' : 'min-h-[72px] py-3'
           }`}
         >
-          {question && qrCodeUrl && (
-            <div className="absolute left-8 top-1/2 -translate-y-1/2 flex items-center gap-3">
-              <div className="bg-white rounded-xl p-2 shadow-2xl">
-                <img
-                  src={qrCodeUrl}
-                  alt="填寫答案 QR Code"
-                  className="w-[88px] h-[88px] object-contain"
-                />
-              </div>
-              <div className="hidden lg:block text-left">
-                <p className="text-xs uppercase tracking-[0.3em] text-green-300/80">填寫答案</p>
-              </div>
-            </div>
-          )}
-          <div className={`flex items-center gap-3 ${hideHeaderChrome ? 'opacity-0 pointer-events-none' : ''}`}>
-            <span className="text-gray-400 text-sm font-medium">PreEvent Live</span>
-            <div className="flex items-center gap-2">
-              <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-              <span className="text-xs text-gray-500">{connected ? '即時連線中' : '連線中斷'}</span>
-            </div>
-          </div>
-          <div className="flex-1 text-center overflow-hidden">
-            {question ? (
-              <>
-                <div className="absolute right-8 top-4">
-                  <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.4em] text-green-300/80">
-                    <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-                    掃描 QR CODE 作答
-                  </div>
+          <div className="flex min-w-0 items-center gap-3 justify-self-start">
+            {projectorHeaderQuestion && qrCodeUrl && (
+              <div className="flex shrink-0 items-center gap-3">
+                <div className="bg-white rounded-xl p-2 shadow-2xl">
+                  <img
+                    src={qrCodeUrl}
+                    alt="填寫答案 QR Code"
+                    className="w-[88px] h-[88px] object-contain"
+                  />
                 </div>
-                <h2 className="mx-auto max-w-[min(60vw,900px)] text-2xl md:text-3xl font-semibold text-white leading-tight text-center">
-                  {question.title}
-                </h2>
-              </>
-            ) : (
-              <span className="text-sm text-gray-500">PreEvent Live</span>
+                <div className="hidden xl:block text-left">
+                  <p className="text-xs uppercase tracking-[0.3em] text-green-300/80">填寫答案</p>
+                </div>
+              </div>
             )}
+            <div className={`flex min-w-0 items-center gap-3 ${hideHeaderChrome ? 'opacity-0 pointer-events-none' : ''}`}>
+              <span className="hidden xl:inline text-gray-400 text-sm font-medium">PreEvent Live</span>
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 shrink-0 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+                <span className="truncate text-xs text-gray-500">{connected ? '即時連線中' : '連線中斷'}</span>
+              </div>
+            </div>
           </div>
-          <div className={`flex items-center gap-3 ${hideHeaderChrome ? 'opacity-0 pointer-events-none' : ''}`}>
-            <span className="text-gray-500 text-xs font-mono">{sessionId}</span>
-            <div className="flex gap-2">
+          <div className="min-w-0 text-center overflow-hidden">
+            {projectorHeaderQuestion ? (
+              <h2 className="mx-auto max-w-[920px] text-2xl md:text-3xl font-semibold text-white leading-tight text-center">
+                {projectorHeaderQuestion.title}
+              </h2>
+            ) : !question ? (
+              <span className="text-sm text-gray-500">PreEvent Live</span>
+            ) : null}
+          </div>
+          <div className="flex min-w-0 flex-col items-end gap-2 justify-self-end text-right">
+            {projectorHeaderQuestion && (
+              <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.3em] text-green-300/80">
+                <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                掃描 QR CODE 作答
+              </div>
+            )}
+            <div className={`flex max-w-full items-center gap-3 ${hideHeaderChrome ? 'opacity-0 pointer-events-none' : ''}`}>
+              <span className="truncate text-gray-500 text-xs font-mono">{sessionId}</span>
               {!projectorMode ? (
                 <button
                   onClick={enterProjectorMode}
-                  className="px-3 py-1.5 text-xs uppercase tracking-widest border border-white/20 rounded-full text-white/70 hover:text-white"
+                  className="shrink-0 px-3 py-1.5 text-xs uppercase tracking-widest border border-white/20 rounded-full text-white/70 hover:text-white"
                 >
                   投影模式
                 </button>
               ) : (
                 <button
                   onClick={exitProjectorMode}
-                  className="px-3 py-1.5 text-xs uppercase tracking-widest border border-white/20 rounded-full text-white/70 hover:text-white"
+                  className="shrink-0 px-3 py-1.5 text-xs uppercase tracking-widest border border-white/20 rounded-full text-white/70 hover:text-white"
                 >
                   離開投影
                 </button>
