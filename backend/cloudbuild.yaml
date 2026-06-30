@@ -1,0 +1,15 @@
+steps:
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'preevent-backend'
+      - '--source'
+      - '.'
+      - '--region'
+      - 'asia-east1'
+      - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'FIREBASE_PROJECT_ID=preevent-victor-2026'
+timeout: '600s'

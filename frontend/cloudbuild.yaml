@@ -1,0 +1,13 @@
+steps:
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'preevent-frontend'
+      - '--source'
+      - '.'
+      - '--region'
+      - 'asia-east1'
+      - '--allow-unauthenticated'
+timeout: '600s'
