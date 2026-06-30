@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { listQuestions, createQuestion, updateQuestion, updateQuestionStatus, getSession, seedAnswers, deleteQuestion, clearQuestionAnswers, resetSessionAnswers, updateSessionName, setDisplayMode } from '../api/client';
+import { listQuestions, createQuestion, updateQuestion, updateQuestionStatus, getSession, seedAnswers, deleteQuestion, clearQuestionAnswers, resetSessionAnswers, updateSessionName, setDisplayMode, runQuestionLoadTest } from '../api/client';
 import { QuestionEditor } from '../components/QuestionEditor';
 import { ResultChart } from '../components/ResultChart';
 import { updateStoredSessionName } from './HomePage';
@@ -88,6 +88,7 @@ export function HostPage() {
   const [clearingQuestionId, setClearingQuestionId] = useState<string | null>(null);
   const [resettingSession, setResettingSession] = useState(false);
   const [displayModeUpdatingQuestionId, setDisplayModeUpdatingQuestionId] = useState<string | null>(null);
+  const [loadTestingQuestionId, setLoadTestingQuestionId] = useState<string | null>(null);
   const [reopeningQuestionId, setReopeningQuestionId] = useState<string | null>(null);
   const [startingQuestionId, setStartingQuestionId] = useState<string | null>(null);
 
@@ -232,6 +233,21 @@ export function HostPage() {
       alert(err instanceof Error ? err.message : '切換投影顯示失敗');
     } finally {
       setDisplayModeUpdatingQuestionId(null);
+    }
+  }
+
+  async function handleQuestionLoadTest(question: Question) {
+    if (!sessionId || !hostToken) return;
+    if (!window.confirm(`確定要對「${question.title}」模擬 500 人同秒作答嗎？`)) return;
+    setLoadTestingQuestionId(question.questionId);
+    try {
+      const result = await runQuestionLoadTest(sessionId, question.questionId, hostToken);
+      alert(`已送入 ${result.inserted} 筆壓測作答`);
+      await fetchQuestions();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '壓測失敗');
+    } finally {
+      setLoadTestingQuestionId(null);
     }
   }
 
@@ -631,7 +647,7 @@ export function HostPage() {
                         {displayModeUpdatingQuestionId === q.questionId
                           ? '切換中...'
                           : q.displayMode === 'results'
-                            ? '隱藏答案'
+                            ? '顯示 QR CODE'
                             : '顯示答案'}
                       </button>
                       <button
@@ -675,6 +691,13 @@ export function HostPage() {
                       灌入測試資料
                     </button>
                   )}
+                  <button
+                    onClick={() => handleQuestionLoadTest(q)}
+                    disabled={loadTestingQuestionId === q.questionId}
+                    className="px-3 py-1.5 bg-orange-50 text-orange-700 text-sm font-medium rounded-lg border border-orange-200 hover:bg-orange-100 disabled:opacity-40 transition-colors"
+                  >
+                    {loadTestingQuestionId === q.questionId ? '壓測中...' : '500人壓測'}
+                  </button>
                   <button
                     onClick={() => handleResetQuestion(q)}
                     disabled={clearingQuestionId === q.questionId}

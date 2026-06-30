@@ -203,3 +203,17 @@ export function seedAnswers(
     body: JSON.stringify(payload),
   });
 }
+
+export function runQuestionLoadTest(
+  sessionId: string,
+  questionId: string,
+  hostToken: string,
+): Promise<{ success: boolean; inserted: number }> {
+  return request(`/api/sessions/${sessionId}/questions/${questionId}/load-test`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${hostToken}`,
+    },
+  });
+}

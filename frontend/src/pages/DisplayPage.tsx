@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useLiveQuestion } from '../hooks/useLiveQuestion';
 import { ResultChart } from '../components/ResultChart';
@@ -13,6 +13,9 @@ export function DisplayPage() {
   const [searchParams] = useSearchParams();
   const { question, loading, error, connected } = useLiveQuestion(sessionId ?? '');
   const [projectorMode, setProjectorMode] = useState(searchParams.get('mode') === 'projector');
+  const [revealedCounts, setRevealedCounts] = useState<Record<string, number>>({});
+  const [revealedTotalResponses, setRevealedTotalResponses] = useState(0);
+  const [revealedTextCount, setRevealedTextCount] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const joinUrl = sessionId ? `${window.location.origin}/join/${sessionId}` : '';
 
@@ -64,11 +67,64 @@ export function DisplayPage() {
   const isMapScene = question?.type !== 'TEXT' && derivedScene === 'map3d';
   const isMapHudScene = question?.type !== 'TEXT' && derivedScene === 'map3d-hud';
   const showAnswers = question?.displayMode === 'results';
+  const revealTargetSignature = useMemo(() => {
+    if (!question || !showAnswers) return '';
+    return JSON.stringify({
+      id: question.id,
+      options: question.options.map((option) => [option.id, option.count]),
+      recentTexts: question.recentTexts.length,
+      totalResponses: question.totalResponses,
+    });
+  }, [question, showAnswers]);
+  const displayedOptions = useMemo(() => (
+    question?.options.map((option) => ({
+      ...option,
+      count: showAnswers ? (revealedCounts[option.id] ?? 0) : 0,
+    })) ?? []
+  ), [question?.options, revealedCounts, showAnswers]);
+  const displayedRecentTexts = useMemo(() => (
+    showAnswers ? (question?.recentTexts ?? []).slice(0, revealedTextCount) : []
+  ), [question?.recentTexts, revealedTextCount, showAnswers]);
+  const displayedTotalResponses = showAnswers ? revealedTotalResponses : 0;
   const showQuestionQr = Boolean(question && !showAnswers);
   const hideHeaderChrome = projectorMode;
   const qrCodeUrl = joinUrl
     ? `https://api.qrserver.com/v1/create-qr-code/?size=360x360&data=${encodeURIComponent(joinUrl)}`
     : '';
+
+  useEffect(() => {
+    if (!question || !showAnswers) {
+      setRevealedCounts({});
+      setRevealedTotalResponses(0);
+      setRevealedTextCount(0);
+      return undefined;
+    }
+
+    setRevealedCounts((current) => {
+      const next: Record<string, number> = {};
+      question.options.forEach((option) => {
+        next[option.id] = Math.min(current[option.id] ?? 0, option.count);
+      });
+      return next;
+    });
+    setRevealedTotalResponses((current) => Math.min(current, question.totalResponses));
+    setRevealedTextCount((current) => Math.min(current, question.recentTexts.length));
+
+    const interval = window.setInterval(() => {
+      setRevealedCounts((current) => {
+        const next = { ...current };
+        const target = question.options.find((option) => (next[option.id] ?? 0) < option.count);
+        if (target) {
+          next[target.id] = (next[target.id] ?? 0) + 1;
+        }
+        return next;
+      });
+      setRevealedTotalResponses((current) => Math.min(current + 1, question.totalResponses));
+      setRevealedTextCount((current) => Math.min(current + 1, question.recentTexts.length));
+    }, 180);
+
+    return () => window.clearInterval(interval);
+  }, [question, revealTargetSignature, showAnswers]);
 
   return (
     <div
@@ -81,7 +137,7 @@ export function DisplayPage() {
             projectorMode ? 'min-h-[132px] py-5' : 'py-4'
           }`}
         >
-          {projectorMode && question && qrCodeUrl && (
+          {question && qrCodeUrl && (
             <div className="absolute left-8 top-1/2 -translate-y-1/2 flex items-center gap-3">
               <div className="bg-white rounded-xl p-2 shadow-2xl">
                 <img
@@ -103,12 +159,12 @@ export function DisplayPage() {
             </div>
           </div>
           <div className="flex-1 text-center overflow-hidden">
-            {projectorMode && question ? (
+            {question ? (
               <>
                 <div className="absolute right-8 top-4">
                   <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.4em] text-green-300/80">
                     <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-                    作答開放中
+                    掃描 QR CODE 作答
                   </div>
                 </div>
                 <h2 className="mx-auto max-w-[min(60vw,900px)] text-2xl md:text-3xl font-semibold text-white leading-tight text-center">
@@ -191,45 +247,45 @@ export function DisplayPage() {
               <SpotlightScene
                 sessionId={sessionId ?? ''}
                 questionId={question.id}
-                fallbackTexts={question.recentTexts}
+                fallbackTexts={displayedRecentTexts}
               />
             </div>
           ) : isWordCloudScene ? (
             <div className="absolute inset-0">
               <MagicWordCloudScene
-                texts={question.recentTexts}
-                totalResponses={question.totalResponses}
+                texts={displayedRecentTexts}
+                totalResponses={displayedTotalResponses}
               />
             </div>
           ) : isMapScene ? (
             <div className="absolute inset-0">
-              <ThreeMapScene options={question.options} sessionId={sessionId ?? ''} />
+              <ThreeMapScene options={displayedOptions} sessionId={sessionId ?? ''} />
             </div>
           ) : isMapHudScene ? (
             <div className="absolute inset-0">
-              <ThreeMapSceneHUD options={question.options} sessionId={sessionId ?? ''} />
+              <ThreeMapSceneHUD options={displayedOptions} sessionId={sessionId ?? ''} />
             </div>
           ) : (
             <div className="w-full max-w-4xl">
             {/* ── Results view: show chart / scene ── */}
             {question.type !== 'TEXT' ? (
               <div className="bg-gray-900 rounded-3xl p-8 border border-gray-800">
-                {question.totalResponses === 0 ? (
+                {displayedTotalResponses === 0 ? (
                   <div className="text-center py-8 text-gray-600">
                     <p className="text-lg">等待第一份答案...</p>
                   </div>
                 ) : (
                   <ResultChart
-                    options={question.options}
-                    totalResponses={question.totalResponses}
+                    options={displayedOptions}
+                    totalResponses={displayedTotalResponses}
                   />
                 )}
               </div>
             ) : (
               <div className="bg-gray-900 rounded-3xl p-8 border border-gray-800">
                 <TextAnswerWall
-                  texts={question.recentTexts}
-                  totalResponses={question.totalResponses}
+                  texts={displayedRecentTexts}
+                  totalResponses={displayedTotalResponses}
                 />
               </div>
             )}
@@ -238,10 +294,10 @@ export function DisplayPage() {
             <div className="mt-4 text-center text-gray-600 text-sm">
               {question.type !== 'TEXT' ? (
                 <p>
-                  {question.type === 'SINGLE_CHOICE' ? '單選題' : '多選題'} · 共 {question.totalResponses} 人作答
+                  {question.type === 'SINGLE_CHOICE' ? '單選題' : '多選題'} · 共 {displayedTotalResponses} 人作答
                 </p>
               ) : derivedScene !== 'spotlight' && (
-                <p>文字題 · 共 {question.totalResponses} 人作答</p>
+                <p>文字題 · 共 {displayedTotalResponses} 人作答</p>
               )}
             </div>
           </div>

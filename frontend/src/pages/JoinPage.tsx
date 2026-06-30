@@ -14,13 +14,37 @@ function getRespondentId(): string {
   return id;
 }
 
+function getAnsweredQuestionsKey(sessionId: string, respondentId: string): string {
+  return `answeredQuestions:${sessionId}:${respondentId}`;
+}
+
+function getAnsweredQuestions(sessionId: string, respondentId: string): string[] {
+  const raw = localStorage.getItem(getAnsweredQuestionsKey(sessionId, respondentId));
+  if (!raw) return [];
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveAnsweredQuestion(sessionId: string, respondentId: string, questionId: string): void {
+  const answered = new Set(getAnsweredQuestions(sessionId, respondentId));
+  answered.add(questionId);
+  localStorage.setItem(getAnsweredQuestionsKey(sessionId, respondentId), JSON.stringify([...answered]));
+}
+
 export function JoinPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const respondentId = getRespondentId();
 
   const [session, setSession] = useState<Session | null>(null);
   const [question, setQuestion] = useState<Question | null>(null);
-  const [answeredQuestionId, setAnsweredQuestionId] = useState<string | null>(null);
+  const [answeredQuestionIds, setAnsweredQuestionIds] = useState<string[]>(() => (
+    sessionId ? getAnsweredQuestions(sessionId, respondentId) : []
+  ));
   const [loading, setLoading] = useState(true);
 
   // Fetch session info once
@@ -50,12 +74,11 @@ export function JoinPage() {
 
   // Reset answered state when question changes
   useEffect(() => {
-    if (question && question.questionId !== answeredQuestionId) {
-      // New question came up; keep answered state if same question
-    }
-  }, [question, answeredQuestionId]);
+    if (!sessionId) return;
+    setAnsweredQuestionIds(getAnsweredQuestions(sessionId, respondentId));
+  }, [sessionId, respondentId, question?.questionId]);
 
-  const hasAnswered = answeredQuestionId === question?.questionId;
+  const hasAnswered = question ? answeredQuestionIds.includes(question.questionId) : false;
 
   async function handleSubmit(answer: {
     optionId?: string;
@@ -63,11 +86,18 @@ export function JoinPage() {
     textValue?: string;
   }) {
     if (!sessionId || !question) return;
-    await submitAnswer(sessionId, question.questionId, {
-      respondentId,
-      ...answer,
-    });
-    setAnsweredQuestionId(question.questionId);
+    try {
+      await submitAnswer(sessionId, question.questionId, {
+        respondentId,
+        ...answer,
+      });
+    } catch (err) {
+      if (!(err instanceof Error) || err.message !== 'Already answered') {
+        throw err;
+      }
+    }
+    saveAnsweredQuestion(sessionId, respondentId, question.questionId);
+    setAnsweredQuestionIds(getAnsweredQuestions(sessionId, respondentId));
   }
 
   return (
