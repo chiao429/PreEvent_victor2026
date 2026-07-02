@@ -28,6 +28,12 @@ const SCENE_OPTIONS: Record<QuestionType, { value: DisplayScene; label: string; 
   ],
 };
 
+const TYPE_SELECTED_CLASS: Record<QuestionType, string> = {
+  SINGLE_CHOICE: 'border-[#2563EB] bg-[#2563EB] text-white shadow-sm',
+  MULTI_CHOICE: 'border-[#7C3AED] bg-[#7C3AED] text-white shadow-sm',
+  TEXT: 'border-[#0F766E] bg-[#0F766E] text-white shadow-sm',
+};
+
 export function QuestionEditor({ onSubmit, onCancel }: Props) {
   const [type, setType] = useState<QuestionType>('SINGLE_CHOICE');
   const [title, setTitle] = useState('');
@@ -87,8 +93,8 @@ export function QuestionEditor({ onSubmit, onCancel }: Props) {
   }
 
   return (
-    <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
-      <h3 className="text-lg font-semibold text-gray-900 mb-4">新增題目</h3>
+    <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+      <h3 className="mb-4 text-lg font-semibold text-gray-950">新增題目</h3>
 
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Type selector */}
@@ -102,8 +108,8 @@ export function QuestionEditor({ onSubmit, onCancel }: Props) {
                 onClick={() => setType(t)}
                 className={`flex-1 py-2 px-3 rounded-lg border text-sm font-medium transition-colors
                   ${type === t
-                    ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
-                    : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                    ? TYPE_SELECTED_CLASS[t]
+                    : 'border-gray-200 bg-white text-gray-600 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700'
                   }`}
               >
                 {TYPE_LABELS[t]}
@@ -123,11 +129,13 @@ export function QuestionEditor({ onSubmit, onCancel }: Props) {
                 onClick={() => setDisplayScene(scene.value)}
                 className={`text-left rounded-2xl border p-3 transition-all ${
                   displayScene === scene.value
-                    ? 'border-indigo-500 bg-indigo-50 shadow-sm'
-                    : 'border-gray-200 hover:border-gray-300'
+                    ? 'border-[#4F46E5] bg-indigo-50 shadow-sm ring-1 ring-indigo-100'
+                    : 'border-gray-200 bg-white hover:border-indigo-200 hover:bg-indigo-50/60'
                 }`}
               >
-                <p className="font-semibold text-gray-900">{scene.label}</p>
+                <p className={`font-semibold ${displayScene === scene.value ? 'text-[#4338CA]' : 'text-gray-950'}`}>
+                  {scene.label}
+                </p>
                 <p className="text-xs text-gray-500 mt-1 leading-relaxed">{scene.description}</p>
               </button>
             ))}
@@ -143,7 +151,7 @@ export function QuestionEditor({ onSubmit, onCancel }: Props) {
             onChange={(e) => setTitle(e.target.value)}
             placeholder="請輸入題目..."
             maxLength={500}
-            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-500 transition-colors"
+            className="w-full rounded-md border border-gray-200 px-3 py-2 transition-colors focus:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-100"
           />
         </div>
 
@@ -160,7 +168,7 @@ export function QuestionEditor({ onSubmit, onCancel }: Props) {
                     onChange={(e) => updateOption(idx, e.target.value)}
                     placeholder={`選項 ${idx + 1}`}
                     maxLength={200}
-                    className="flex-1 px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-500 transition-colors"
+                    className="flex-1 rounded-md border border-gray-200 px-3 py-2 transition-colors focus:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-100"
                   />
                   {options.length > 2 && (
                     <button
@@ -176,7 +184,7 @@ export function QuestionEditor({ onSubmit, onCancel }: Props) {
               <button
                 type="button"
                 onClick={addOption}
-                className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+                className="text-sm font-medium text-[#4F46E5] hover:text-[#4338CA]"
               >
                 + 新增選項
               </button>
@@ -191,14 +199,14 @@ export function QuestionEditor({ onSubmit, onCancel }: Props) {
             type="button"
             onClick={onCancel}
             disabled={submitting}
-            className="flex-1 py-2 px-4 border border-gray-200 rounded-lg text-gray-700 font-medium hover:bg-gray-50 transition-colors"
+            className="flex-1 rounded-md border border-gray-200 px-4 py-2 font-medium text-gray-700 transition-colors hover:bg-gray-50"
           >
             取消
           </button>
           <button
             type="submit"
             disabled={submitting}
-            className="flex-1 py-2 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-semibold rounded-lg transition-colors"
+            className="flex-1 rounded-md bg-[#4F46E5] px-4 py-2 font-semibold text-white transition-colors hover:bg-[#4338CA] disabled:bg-indigo-300"
           >
             {submitting ? '建立中...' : '建立題目'}
           </button>

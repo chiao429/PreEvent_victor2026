@@ -20,7 +20,7 @@ const createQuestionSchema = z.object({
 });
 
 const patchQuestionSchema = z.object({
-  status: z.enum(['DRAFT', 'OPEN', 'CLOSED']),
+  status: z.enum(['OPEN', 'CLOSED']),
 });
 
 function mergeOptions(
@@ -207,7 +207,7 @@ questionRouter.post('/:id/questions', requireHostToken, async (req: Request, res
     await questionsRef.doc(questionId).set({
       type,
       title,
-      status: 'DRAFT',
+      status: 'CLOSED',
       order,
       options,
       optionCounts,
@@ -225,7 +225,7 @@ questionRouter.post('/:id/questions', requireHostToken, async (req: Request, res
       questionId,
       type,
       title,
-      status: 'DRAFT',
+      status: 'CLOSED',
       order,
       options: options.map((opt) => ({ ...opt, count: 0 })),
       totalResponses: 0,

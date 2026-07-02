@@ -34,8 +34,6 @@ export function HomePage() {
   const navigate = useNavigate();
 
   const [sessionName, setSessionName] = useState('');
-  const [joinId, setJoinId] = useState('');
-  const [displayId, setDisplayId] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionRecord[]>(loadSessionRecords);
@@ -145,60 +143,6 @@ export function HomePage() {
                   className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-semibold rounded-xl transition-colors"
                 >
                   {creating ? '建立中...' : '建立場次'}
-                </button>
-              </form>
-            </div>
-
-            {/* Join as audience */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">觀眾：加入投票</h2>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (joinId.trim()) navigate(`/join/${joinId.trim()}`);
-                }}
-                className="flex gap-2"
-              >
-                <input
-                  type="text"
-                  value={joinId}
-                  onChange={(e) => setJoinId(e.target.value)}
-                  placeholder="輸入場次 ID"
-                  className="flex-1 min-w-0 px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:border-indigo-500 transition-colors"
-                />
-                <button
-                  type="submit"
-                  disabled={!joinId.trim()}
-                  className="px-5 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 text-white font-semibold rounded-xl transition-colors"
-                >
-                  加入
-                </button>
-              </form>
-            </div>
-
-            {/* Display mode */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">大螢幕：投影顯示模式</h2>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (displayId.trim()) navigate(`/display/${displayId.trim()}`);
-                }}
-                className="flex gap-2"
-              >
-                <input
-                  type="text"
-                  value={displayId}
-                  onChange={(e) => setDisplayId(e.target.value)}
-                  placeholder="輸入場次 ID"
-                  className="flex-1 min-w-0 px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:border-indigo-500 transition-colors"
-                />
-                <button
-                  type="submit"
-                  disabled={!displayId.trim()}
-                  className="px-5 py-3 bg-gray-800 hover:bg-gray-900 disabled:bg-gray-400 text-white font-semibold rounded-xl transition-colors"
-                >
-                  顯示
                 </button>
               </form>
             </div>

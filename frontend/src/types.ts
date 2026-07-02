@@ -29,6 +29,7 @@ export interface Question {
 export interface Session {
   sessionId: string;
   name: string;
+  displayMode?: 'question' | 'results';
 }
 
 export interface LiveQuestion {

@@ -91,7 +91,7 @@ export function DisplayPage() {
   const hideHeaderChrome = projectorMode;
   const projectorHeaderQuestion = projectorMode ? question : null;
   const qrCodeUrl = joinUrl
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=360x360&data=${encodeURIComponent(joinUrl)}`
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&data=${encodeURIComponent(joinUrl)}`
     : '';
 
   useEffect(() => {
@@ -136,7 +136,7 @@ export function DisplayPage() {
       {!showQuestionQr && (
         <div
           className={`grid grid-cols-[minmax(190px,24vw)_minmax(0,1fr)_minmax(190px,24vw)] items-center gap-4 px-6 sm:px-8 border-b border-gray-800 transition-all duration-300 ${
-            projectorHeaderQuestion ? 'min-h-[132px] py-4' : 'min-h-[72px] py-3'
+            projectorHeaderQuestion ? 'min-h-[116px] py-3' : 'min-h-[72px] py-3'
           }`}
         >
           <div className="flex min-w-0 items-center gap-3 justify-self-start">
@@ -150,7 +150,7 @@ export function DisplayPage() {
                   />
                 </div>
                 <div className="hidden xl:block text-left">
-                  <p className="text-xs uppercase tracking-[0.3em] text-green-300/80">填寫答案</p>
+                  <p className="text-xl font-bold uppercase tracking-[0.2em] text-green-300/85 2xl:text-2xl">填寫答案</p>
                 </div>
               </div>
             )}
@@ -164,7 +164,7 @@ export function DisplayPage() {
           </div>
           <div className="min-w-0 text-center overflow-hidden">
             {projectorHeaderQuestion ? (
-              <h2 className="mx-auto max-w-[920px] text-2xl md:text-3xl font-semibold text-white leading-tight text-center">
+              <h2 className="mx-auto max-w-[1100px] text-[clamp(2.5rem,4.2vw,5rem)] font-black leading-[1.02] text-white text-center">
                 {projectorHeaderQuestion.title}
               </h2>
             ) : !question ? (
@@ -173,8 +173,8 @@ export function DisplayPage() {
           </div>
           <div className="flex min-w-0 flex-col items-end gap-2 justify-self-end text-right">
             {projectorHeaderQuestion && (
-              <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.3em] text-green-300/80">
-                <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+              <div className="inline-flex items-center gap-3 text-lg font-bold uppercase tracking-[0.2em] text-green-300/85 2xl:text-xl">
+                <span className="h-3 w-3 rounded-full bg-green-400 animate-pulse" />
                 掃描 QR CODE 作答
               </div>
             )}
@@ -245,18 +245,18 @@ export function DisplayPage() {
         )}
 
         {!loading && !error && question && !showAnswers && (
-          <div className="text-center text-gray-200">
-            <p className="text-sm uppercase tracking-[0.35em] text-green-300/80 mb-5">開始作答</p>
-            <h1 className="text-4xl md:text-6xl font-black text-white leading-tight max-w-5xl">
+          <div className="flex w-[86vw] max-w-[1700px] flex-col items-center text-center text-gray-200">
+            <p className="mb-6 text-3xl font-bold uppercase tracking-[0.34em] text-green-300/85 md:text-5xl">開始作答</p>
+            <h1 className="max-w-[88vw] text-[clamp(4rem,8.5vw,10rem)] font-black leading-[0.98] text-white">
               {question.title}
             </h1>
-            <p className="mt-5 text-lg text-gray-500">掃描 QR Code 填寫答案</p>
-            <div className="mt-10 inline-flex flex-col items-center bg-white/5 border border-white/10 rounded-3xl p-6 shadow-lg">
-              <div className="bg-white rounded-2xl p-4 shadow-2xl">
+            <p className="mt-7 text-5xl font-bold text-gray-300 md:text-7xl">掃描 QR Code 填寫答案</p>
+            <div className="mt-8 inline-flex flex-col items-center rounded-[2rem] border border-white/10 bg-white/5 p-4 shadow-lg md:p-5">
+              <div className="rounded-[1.5rem] bg-white p-4 shadow-2xl">
                 <img
                   src={qrCodeUrl}
                   alt="填寫答案 QR Code"
-                  className="w-[280px] h-[280px] md:w-[340px] md:h-[340px] object-contain"
+                  className="h-[min(54vw,42vh)] w-[min(54vw,42vh)] object-contain"
                 />
               </div>
             </div>

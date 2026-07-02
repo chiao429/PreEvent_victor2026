@@ -6,24 +6,34 @@ import { ResultChart } from '../components/ResultChart';
 import { updateStoredSessionName } from './HomePage';
 import type { DisplayScene, Question, QuestionType, Session } from '../types';
 
-const STATUS_LABEL: Record<string, string> = {
-  DRAFT: '草稿',
-  OPEN: '作答中',
-  CLOSED: '已關閉',
+const TYPE_LABEL: Record<QuestionType, string> = {
+  SINGLE_CHOICE: '單選',
+  MULTI_CHOICE: '多選',
+  TEXT: '文字',
 };
 
 const SCENE_LABEL: Record<string, string> = {
   default: '標準長條圖',
+  map3d: 'map3d',
   'text-wall': '文字牆',
   spotlight: '聚光燈文字',
   'word-cloud': '魔幻星空 Word Cloud',
   'map3d-hud': '3D 地圖 HUD',
 };
 
-const STATUS_COLOR: Record<string, string> = {
-  DRAFT: 'bg-gray-100 text-gray-600',
-  OPEN: 'bg-green-100 text-green-700',
-  CLOSED: 'bg-red-100 text-red-600',
+const TYPE_BADGE_CLASS: Record<QuestionType, string> = {
+  SINGLE_CHOICE: 'bg-[#2563EB] text-white',
+  MULTI_CHOICE: 'bg-[#7C3AED] text-white',
+  TEXT: 'bg-[#0F766E] text-white',
+};
+
+const SCENE_BADGE_CLASS: Record<string, string> = {
+  default: 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]',
+  map3d: 'border-[#16A34A] bg-green-50 text-[#15803D]',
+  'map3d-hud': 'border-[#0891B2] bg-cyan-50 text-[#0E7490]',
+  'text-wall': 'border-[#EA580C] bg-orange-50 text-[#C2410C]',
+  spotlight: 'border-[#F59E0B] bg-amber-50 text-[#B45309]',
+  'word-cloud': 'border-[#9333EA] bg-purple-50 text-[#7E22CE]',
 };
 
 const MAX_TEXT_SEED_COUNT = 500;
@@ -73,10 +83,11 @@ export function HostPage() {
   const [clearingQuestionId, setClearingQuestionId] = useState<string | null>(null);
   const [deletingQuestionId, setDeletingQuestionId] = useState<string | null>(null);
   const [resettingSession, setResettingSession] = useState(false);
-  const [displayModeUpdatingQuestionId, setDisplayModeUpdatingQuestionId] = useState<string | null>(null);
+  const [displayModeUpdating, setDisplayModeUpdating] = useState(false);
   const [loadTestingQuestionId, setLoadTestingQuestionId] = useState<string | null>(null);
-  const [reopeningQuestionId, setReopeningQuestionId] = useState<string | null>(null);
-  const [startingQuestionId, setStartingQuestionId] = useState<string | null>(null);
+  const [statusUpdatingQuestionId, setStatusUpdatingQuestionId] = useState<string | null>(null);
+  const [isHostMenuOpen, setIsHostMenuOpen] = useState(false);
+  const [openQuestionMenuId, setOpenQuestionMenuId] = useState<string | null>(null);
   const [wordCloudIntervalDrafts, setWordCloudIntervalDrafts] = useState<Record<string, string>>({});
   const [wordCloudUpdatingQuestionId, setWordCloudUpdatingQuestionId] = useState<string | null>(null);
   const [spotlightSloganDrafts, setSpotlightSloganDrafts] = useState<Record<string, string>>({});
@@ -111,6 +122,29 @@ export function HostPage() {
     const interval = setInterval(fetchQuestions, 3000);
     return () => clearInterval(interval);
   }, [fetchQuestions]);
+
+  useEffect(() => {
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('[data-host-menu], [data-question-menu]')) return;
+      setIsHostMenuOpen(false);
+      setOpenQuestionMenuId(null);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setIsHostMenuOpen(false);
+        setOpenQuestionMenuId(null);
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
 
   async function handleCreateQuestion(data: { type: QuestionType; title: string; options?: string[]; displayScene: DisplayScene }) {
     if (!sessionId || !hostToken) return;
@@ -206,25 +240,27 @@ export function HostPage() {
   async function handleToggleStatus(question: Question) {
     if (!sessionId || !hostToken) return;
     const nextStatus = question.status === 'OPEN' ? 'CLOSED' : 'OPEN';
+    setStatusUpdatingQuestionId(question.questionId);
     try {
       await updateQuestionStatus(sessionId, hostToken, question.questionId, nextStatus);
       await fetchQuestions();
     } catch (err) {
       alert(err instanceof Error ? err.message : '操作失敗');
+    } finally {
+      setStatusUpdatingQuestionId(null);
     }
   }
 
-  async function handleToggleDisplayAnswers(question: Question) {
+  async function handleSetProjectionDisplayMode(displayMode: 'question' | 'results') {
     if (!sessionId || !hostToken) return;
-    const nextMode = question.displayMode === 'results' ? 'question' : 'results';
-    setDisplayModeUpdatingQuestionId(question.questionId);
+    setDisplayModeUpdating(true);
     try {
-      await setDisplayMode(sessionId, hostToken, nextMode);
+      await setDisplayMode(sessionId, hostToken, displayMode);
       await fetchQuestions();
     } catch (err) {
       alert(err instanceof Error ? err.message : '切換投影顯示失敗');
     } finally {
-      setDisplayModeUpdatingQuestionId(null);
+      setDisplayModeUpdating(false);
     }
   }
 
@@ -439,32 +475,6 @@ export function HostPage() {
     }
   }
 
-  async function handleCloseDraft(question: Question) {
-    if (!sessionId || !hostToken) return;
-    setStartingQuestionId(question.questionId);
-    try {
-      await updateQuestionStatus(sessionId, hostToken, question.questionId, 'OPEN');
-      await fetchQuestions();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : '操作失敗');
-    } finally {
-      setStartingQuestionId(null);
-    }
-  }
-
-  async function handleReopenAsDraft(question: Question) {
-    if (!sessionId || !hostToken) return;
-    setReopeningQuestionId(question.questionId);
-    try {
-      await updateQuestionStatus(sessionId, hostToken, question.questionId, 'DRAFT');
-      await fetchQuestions();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : '操作失敗');
-    } finally {
-      setReopeningQuestionId(null);
-    }
-  }
-
   function handleGoBack() {
     if (window.history.length > 1) {
       navigate(-1);
@@ -475,6 +485,8 @@ export function HostPage() {
 
   const joinUrl = `${window.location.origin}/join/${sessionId}`;
   const displayUrl = `${window.location.origin}/display/${sessionId}`;
+  const openQuestion = questions.find((q) => q.status === 'OPEN') ?? null;
+  const projectionDisplayMode = session?.displayMode ?? openQuestion?.displayMode ?? 'question';
 
   if (loading) {
     return (
@@ -485,127 +497,188 @@ export function HostPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 px-4 py-4 sticky top-0 z-10">
-        <div className="max-w-3xl mx-auto">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-3 min-w-0">
-              <button
-                type="button"
-                onClick={handleGoBack}
-                className="flex-shrink-0 px-3 py-1.5 bg-gray-100 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors"
-              >
-                ← 上一頁
-              </button>
-              <div className="min-w-0 flex-1">
-                {editingSessionName ? (
-                  <form onSubmit={handleSessionNameSubmit} className="flex flex-wrap items-center gap-2">
-                    <input
-                      type="text"
-                      value={sessionNameDraft}
-                      onChange={(e) => setSessionNameDraft(e.target.value)}
-                      maxLength={200}
-                      autoFocus
-                      className="min-w-0 flex-1 rounded-lg border border-indigo-200 px-3 py-1.5 text-xl font-bold text-gray-900 focus:border-indigo-500 focus:outline-none"
-                    />
-                    <button
-                      type="submit"
-                      disabled={savingSessionName || !sessionNameDraft.trim()}
-                      className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:bg-indigo-300"
-                    >
-                      {savingSessionName ? '儲存中' : '儲存'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingSessionName(false);
-                        setSessionNameError(null);
-                      }}
-                      disabled={savingSessionName}
-                      className="rounded-lg bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-200 disabled:opacity-50"
-                    >
-                      取消
-                    </button>
-                    {sessionNameError && <p className="basis-full text-xs text-red-500">{sessionNameError}</p>}
-                  </form>
-                ) : (
-                  <div className="flex items-center gap-2 min-w-0">
-                    <h1 className="text-xl font-bold text-gray-900 truncate">
+    <div className="min-h-screen bg-gray-50 text-gray-950">
+      <header className="sticky top-0 z-10 border-b border-gray-200 bg-white/95 px-4 py-4 backdrop-blur">
+        <div className="mx-auto flex max-w-5xl flex-col gap-4">
+          <div className="flex min-w-0 items-start gap-3">
+            <button
+              type="button"
+              onClick={handleGoBack}
+              className="mt-1 flex-shrink-0 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
+            >
+              ← 上一頁
+            </button>
+            <div className="min-w-0 flex-1">
+              {editingSessionName ? (
+                <form onSubmit={handleSessionNameSubmit} className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    value={sessionNameDraft}
+                    onChange={(e) => setSessionNameDraft(e.target.value)}
+                    maxLength={200}
+                    autoFocus
+                    className="min-w-0 flex-1 rounded-md border border-gray-200 bg-white px-3 py-2 text-xl font-semibold text-gray-950 shadow-sm focus:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-100"
+                  />
+                  <button
+                    type="submit"
+                    disabled={savingSessionName || !sessionNameDraft.trim()}
+                    className="rounded-md bg-[#4F46E5] px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[#4338CA] disabled:bg-indigo-300"
+                  >
+                    {savingSessionName ? '儲存中' : '儲存'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingSessionName(false);
+                      setSessionNameError(null);
+                    }}
+                    disabled={savingSessionName}
+                    className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    取消
+                  </button>
+                  {sessionNameError && <p className="basis-full text-xs text-red-500">{sessionNameError}</p>}
+                </form>
+              ) : (
+                <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <h1 className="truncate text-2xl font-semibold tracking-tight text-gray-950">
                       {session?.name ?? '主持人後台'}
                     </h1>
                     <button
                       type="button"
                       onClick={startEditingSessionName}
-                      className="flex-shrink-0 rounded-lg bg-gray-100 px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-200 hover:text-gray-700"
+                      className="flex-shrink-0 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-gray-600 shadow-sm hover:bg-gray-50"
                     >
-                      改名
+                      編輯
                     </button>
                   </div>
-                )}
-                <p className="text-xs text-gray-400 mt-0.5 truncate">場次 ID：{sessionId}</p>
-              </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="inline-flex rounded-md shadow-sm">
+                      <a
+                        href={joinUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center rounded-l-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                      >
+                        觀眾連結
+                      </a>
+                      <div className="relative -ml-px" data-host-menu>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsHostMenuOpen((current) => !current);
+                            setOpenQuestionMenuId(null);
+                          }}
+                          aria-expanded={isHostMenuOpen}
+                          className="rounded-r-md border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50"
+                        >
+                          ...
+                        </button>
+                        {isHostMenuOpen && (
+                        <div className="absolute right-0 z-20 mt-2 w-44 overflow-hidden rounded-md border border-gray-200 bg-white p-1 shadow-lg">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsHostMenuOpen(false);
+                              handleResetSession();
+                            }}
+                            disabled={resettingSession || questions.length === 0}
+                            className="block w-full rounded-sm px-3 py-2 text-left text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-40"
+                          >
+                            {resettingSession ? '清除中...' : '清空整場作答'}
+                          </button>
+                        </div>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const width = Math.min(window.screen.availWidth || 1440, 1440);
+                        const height = Math.min(window.screen.availHeight || 900, 900);
+                        const left = Math.max(0, ((window.screen.availWidth || width) - width) / 2);
+                        const top = Math.max(0, ((window.screen.availHeight || height) - height) / 2);
+                        window.open(
+                          displayUrl,
+                          'preevent-display-window',
+                          `popup=yes,width=${width},height=${height},left=${left},top=${top},noopener,noreferrer`,
+                        );
+                      }}
+                      className="inline-flex items-center rounded-md border border-[#1E40AF] bg-[#1E40AF] px-3 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:border-[#1D4ED8] hover:bg-[#1D4ED8]"
+                    >
+                      投影 ↗
+                    </button>
+                  </div>
+                </div>
+              )}
+              <p className="mt-1 truncate text-sm text-gray-500">場次 ID：{sessionId}</p>
+              <section className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+                <h2 className="shrink-0 font-semibold text-gray-700">目前投影狀態：</h2>
+                  <fieldset
+                    className="flex flex-wrap items-center gap-2"
+                    disabled={displayModeUpdating}
+                  >
+                    <legend className="sr-only">投影顯示模式</legend>
+                    <label className="flex cursor-pointer items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50">
+                      <input
+                        type="radio"
+                        name="projection-display-mode"
+                        value="question"
+                        checked={projectionDisplayMode === 'question'}
+                        onChange={() => handleSetProjectionDisplayMode('question')}
+                        className="h-5 w-5 border-gray-300 text-gray-900 focus:ring-gray-900"
+                      />
+                      顯示 QR Code
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50">
+                      <input
+                        type="radio"
+                        name="projection-display-mode"
+                        value="results"
+                        checked={projectionDisplayMode === 'results'}
+                        onChange={() => handleSetProjectionDisplayMode('results')}
+                        className="h-5 w-5 border-gray-300 text-gray-900 focus:ring-gray-900"
+                      />
+                      顯示答案
+                    </label>
+                  </fieldset>
+              </section>
             </div>
-            <span className="text-xs bg-indigo-100 text-indigo-700 px-3 py-1 rounded-full font-medium">
-              主持人模式
-            </span>
           </div>
 
-          <div className="flex gap-2 flex-wrap text-xs">
-            <a
-              href={joinUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg border border-emerald-200 hover:bg-emerald-100 transition-colors"
-            >
-              觀眾連結 ↗
-            </a>
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(joinUrl);
-                alert('觀眾連結已複製！');
-              }}
-              className="px-3 py-1.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors"
-            >
-              複製連結
-            </button>
-            <a
-              href={displayUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-800 text-white rounded-lg hover:bg-gray-900 transition-colors"
-            >
-              大螢幕 ↗
-            </a>
-            <button
-              onClick={handleResetSession}
-              disabled={resettingSession || questions.length === 0}
-              className="px-3 py-1.5 bg-rose-50 text-rose-600 rounded-lg border border-rose-200 hover:bg-rose-100 disabled:opacity-40 transition-colors"
-            >
-              {resettingSession ? '清除中...' : '清空整場作答'}
-            </button>
-          </div>
         </div>
       </header>
 
-      <main className="max-w-3xl mx-auto px-4 py-6 space-y-4">
+      <main className="mx-auto max-w-5xl space-y-4 px-4 py-6">
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 text-sm">
             {error}
           </div>
         )}
 
-        {showEditor ? (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-baseline gap-2">
+            <h2 className="text-base font-semibold text-gray-950">題目列表</h2>
+            <span className="text-sm text-gray-500">{questions.length} 題</span>
+          </div>
+          {!showEditor && (
+            <button
+              type="button"
+              onClick={() => setShowEditor(true)}
+              className="inline-flex items-center gap-2 rounded-md bg-[#4F46E5] px-3 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#4338CA] focus:outline-none focus:ring-2 focus:ring-[#4F46E5]/30"
+            >
+              <span aria-hidden="true" className="text-base leading-none">+</span>
+              新增題目
+            </button>
+          )}
+        </div>
+
+        {showEditor && (
           <QuestionEditor
             onSubmit={handleCreateQuestion}
             onCancel={() => setShowEditor(false)}
           />
-        ) : (
-          <button
-            onClick={() => setShowEditor(true)}
-            className="w-full py-3 border-2 border-dashed border-indigo-300 text-indigo-600 font-medium rounded-2xl hover:border-indigo-400 hover:bg-indigo-50 transition-colors"
-          >
-            + 新增題目
-          </button>
         )}
 
         {questions.length === 0 && !showEditor && (
@@ -615,135 +688,51 @@ export function HostPage() {
           </div>
         )}
 
-        {questions.map((q) => (
-          <div key={q.questionId} className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="p-4">
-              <div className="flex items-start justify-between gap-3 mb-3">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1 flex-wrap">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLOR[q.status]}`}>
-                      {STATUS_LABEL[q.status]}
-                    </span>
-                    <span className="text-xs text-gray-400">
-                      {q.type === 'SINGLE_CHOICE' ? '單選' : q.type === 'MULTI_CHOICE' ? '多選' : '文字'}
-                    </span>
-                    {q.displayScene && (
-                      <span className="text-xs text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-full">
-                        {SCENE_LABEL[q.displayScene] ?? q.displayScene}
-                      </span>
-                    )}
-                  </div>
-                  <p className="font-semibold text-gray-900">{q.title}</p>
-                </div>
+        {questions.map((q) => {
+          const isOpen = q.status === 'OPEN';
+          const isStatusUpdating = statusUpdatingQuestionId === q.questionId;
+          const sceneLabel = q.displayScene ? (SCENE_LABEL[q.displayScene] ?? q.displayScene) : null;
+          const sceneBadgeClass = q.displayScene ? (SCENE_BADGE_CLASS[q.displayScene] ?? 'border-gray-300 bg-white text-gray-700') : '';
 
-                <div className="flex gap-2 flex-shrink-0">
-                  {q.status === 'DRAFT' && (
-                    <>
-                      <button
-                        onClick={() => openEditModal(q)}
-                        className="px-3 py-1.5 bg-amber-50 text-amber-700 text-sm font-medium rounded-lg border border-amber-200 hover:bg-amber-100 transition-colors"
-                      >
-                        編輯
-                      </button>
-                      <button
-                        onClick={() => handleCloseDraft(q)}
-                        disabled={startingQuestionId === q.questionId}
-                        className="px-3 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white text-sm font-medium rounded-lg transition-colors"
-                      >
-                        {startingQuestionId === q.questionId ? '開始中...' : '開始作答'}
-                      </button>
-                      <button
-                        onClick={() => handleDeleteQuestion(q)}
-                        disabled={deletingQuestionId === q.questionId}
-                        className="px-3 py-1.5 bg-gray-100 hover:bg-red-600 hover:text-white text-gray-600 text-sm font-medium rounded-lg transition-colors disabled:opacity-40"
-                      >
-                        {deletingQuestionId === q.questionId ? '刪除中...' : '刪除'}
-                      </button>
-                    </>
-                  )}
-                  {q.status === 'OPEN' && (
-                    <>
-                      <button
-                        onClick={() => handleToggleDisplayAnswers(q)}
-                        disabled={displayModeUpdatingQuestionId === q.questionId}
-                        className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors disabled:opacity-60 ${
-                          q.displayMode === 'results'
-                            ? 'bg-gray-800 hover:bg-gray-900 text-white'
-                            : 'bg-blue-600 hover:bg-blue-700 text-white'
-                        }`}
-                      >
-                        {displayModeUpdatingQuestionId === q.questionId
-                          ? '切換中...'
-                          : q.displayMode === 'results'
-                            ? '顯示 QR CODE'
-                            : '顯示答案'}
-                      </button>
-                      <button
-                        onClick={() => handleToggleStatus(q)}
-                        className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm font-medium rounded-lg transition-colors"
-                      >
-                        關閉作答
-                      </button>
-                    </>
-                  )}
-                  {q.status === 'CLOSED' && (
-                    <>
-                      <button
-                        onClick={() => openEditModal(q)}
-                        className="px-3 py-1.5 bg-amber-50 text-amber-700 text-sm font-medium rounded-lg border border-amber-200 hover:bg-amber-100 transition-colors"
-                      >
-                        編輯
-                      </button>
-                      <button
-                        onClick={() => handleReopenAsDraft(q)}
-                        disabled={reopeningQuestionId === q.questionId}
-                        className="px-3 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white text-sm font-medium rounded-lg transition-colors"
-                      >
-                        {reopeningQuestionId === q.questionId ? '開啟中...' : '重新開啟'}
-                      </button>
-                    </>
-                  )}
-                  {q.status !== 'DRAFT' && (
-                    <button
-                      onClick={() => handleDeleteQuestion(q)}
-                      disabled={deletingQuestionId === q.questionId}
-                      className="px-3 py-1.5 bg-gray-100 hover:bg-red-600 hover:text-white text-gray-600 text-sm font-medium rounded-lg transition-colors disabled:opacity-40"
-                    >
-                      {deletingQuestionId === q.questionId ? '刪除中...' : '刪除'}
-                    </button>
-                  )}
-                  {q.type === 'TEXT' && (
-                    <button
-                      onClick={() => setSeedTarget(q)}
-                      className="px-3 py-1.5 bg-indigo-50 text-indigo-600 text-sm font-medium rounded-lg border border-indigo-200 hover:bg-indigo-100 transition-colors"
-                    >
-                      灌入測試資料
-                    </button>
-                  )}
-                  {q.type !== 'TEXT' && (
-                    <button
-                      onClick={() => setSeedTarget(q)}
-                      className="px-3 py-1.5 bg-indigo-50 text-indigo-600 text-sm font-medium rounded-lg border border-indigo-200 hover:bg-indigo-100 transition-colors"
-                    >
-                      灌入測試資料
-                    </button>
-                  )}
-                  <button
-                    onClick={() => handleQuestionLoadTest(q)}
-                    disabled={loadTestingQuestionId === q.questionId}
-                    className="px-3 py-1.5 bg-orange-50 text-orange-700 text-sm font-medium rounded-lg border border-orange-200 hover:bg-orange-100 disabled:opacity-40 transition-colors"
-                  >
-                    {loadTestingQuestionId === q.questionId ? '壓測中...' : '500人壓測'}
-                  </button>
-                  <button
-                    onClick={() => handleResetQuestion(q)}
-                    disabled={clearingQuestionId === q.questionId}
-                    className="px-3 py-1.5 bg-rose-50 text-rose-600 text-sm font-medium rounded-lg border border-rose-200 hover:bg-rose-100 disabled:opacity-40 transition-colors"
-                  >
-                    {clearingQuestionId === q.questionId ? '清除中...' : '清空此題作答'}
-                  </button>
+          return (
+            <div
+              key={q.questionId}
+              className={`overflow-visible rounded-lg border transition-colors ${
+                isOpen
+                  ? 'border-indigo-300 bg-indigo-50/60 shadow-md shadow-indigo-100/70 ring-1 ring-indigo-100'
+                  : 'border-gray-200 bg-white shadow-sm'
+              }`}
+            >
+              <div className="p-5">
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-3 flex flex-wrap items-center gap-2 text-sm text-gray-500">
+                      <span className={`inline-flex h-6 items-center rounded-full px-2.5 text-xs font-semibold ${TYPE_BADGE_CLASS[q.type]}`}>
+                        {TYPE_LABEL[q.type]}
+                      </span>
+                      {sceneLabel && (
+                        <span className={`inline-flex h-6 items-center rounded-full border px-2.5 text-xs font-semibold ${sceneBadgeClass}`}>
+                          {sceneLabel}
+                        </span>
+                      )}
+                    </div>
+                    <h3 className="text-lg font-semibold leading-7 text-gray-950">{q.title}</h3>
+                    <p className="mt-1 text-sm text-gray-500">{q.totalResponses} 人作答</p>
+                  </div>
+
+                  <label className="inline-flex shrink-0 cursor-pointer items-center gap-3 text-base font-semibold text-gray-800 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60">
+                    <input
+                      type="checkbox"
+                      className="peer sr-only"
+                      checked={isOpen}
+                      disabled={isStatusUpdating}
+                      onChange={() => handleToggleStatus(q)}
+                      aria-label={isOpen ? '切換為已關閉' : '切換為作答中'}
+                    />
+                    <span className="relative inline-flex h-7 w-12 shrink-0 rounded-full bg-[#9CA3AF] transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-6 after:w-6 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-[#16A34A] peer-checked:after:translate-x-5 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-gray-900" />
+                    <span>{isOpen ? '作答中' : '已關閉'}</span>
+                  </label>
                 </div>
-              </div>
 
               {q.type !== 'TEXT' && q.totalResponses > 0 && (
                 <div className="mt-3 pt-3 border-t border-gray-100">
@@ -756,27 +745,23 @@ export function HostPage() {
               )}
 
               {q.type !== 'TEXT' && q.totalResponses === 0 && (
-                <div className="mt-2">
+                <div className="mt-4">
                   <div className="flex flex-wrap gap-1">
                     {q.options.map((opt) => (
-                      <span key={opt.id} className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-md">
+                      <span key={opt.id} className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600">
                         {opt.label}
                       </span>
                     ))}
                   </div>
-                  <p className="text-xs text-gray-400 mt-2">尚無作答</p>
                 </div>
               )}
 
               {q.type === 'TEXT' && (
-                <div className="mt-1 space-y-3">
-                  <p className="text-xs text-gray-400">
-                    文字題・{q.totalResponses} 人作答
-                  </p>
+                <div className="mt-4 space-y-3">
                   {q.displayScene === 'word-cloud' && (
-                    <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-3">
+                    <div className="rounded-lg border border-indigo-200 bg-indigo-50/30 px-3 py-3">
                       <div className="flex flex-wrap items-center gap-2">
-                        <label className="flex items-center gap-2 text-xs font-medium text-indigo-700">
+                        <label className="flex items-center gap-2 text-sm font-semibold text-gray-700">
                           自動刷新秒數
                           <input
                             type="number"
@@ -787,7 +772,7 @@ export function HostPage() {
                               ...prev,
                               [q.questionId]: e.target.value,
                             }))}
-                            className="w-16 rounded-lg border border-indigo-200 bg-white px-2 py-1 text-right text-gray-800 focus:border-indigo-500 focus:outline-none"
+                            className="h-9 w-20 rounded-md border border-gray-300 bg-white px-2 text-right text-sm text-gray-900 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
                           />
                           秒
                         </label>
@@ -795,7 +780,7 @@ export function HostPage() {
                           type="button"
                           onClick={() => handleSaveWordCloudInterval(q)}
                           disabled={wordCloudUpdatingQuestionId === q.questionId}
-                          className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:bg-indigo-300"
+                          className="h-9 rounded-md bg-[#4F46E5] px-3 text-sm font-semibold text-white shadow-sm hover:bg-[#4338CA] disabled:bg-indigo-300"
                         >
                           套用
                         </button>
@@ -803,22 +788,22 @@ export function HostPage() {
                           type="button"
                           onClick={() => handleRefreshWordCloudNow(q)}
                           disabled={wordCloudUpdatingQuestionId === q.questionId}
-                          className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                          className="h-9 rounded-md border border-sky-200 bg-sky-50 px-3 text-sm font-semibold text-sky-700 shadow-sm hover:bg-sky-100 disabled:opacity-50"
                         >
                           立即重新整理
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => handleToggleWordCloudRefresh(q)}
-                          disabled={wordCloudUpdatingQuestionId === q.questionId}
-                          className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
-                            q.wordCloudRefreshPaused
-                              ? 'border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                              : 'border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
-                          }`}
-                        >
-                          {q.wordCloudRefreshPaused ? '恢復重新整理' : '停止重新整理'}
-                        </button>
+                        <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-gray-200 bg-white px-3 text-sm font-semibold text-gray-700 shadow-sm has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50">
+                          <input
+                            type="checkbox"
+                            className="peer sr-only"
+                            checked={!(q.wordCloudRefreshPaused ?? false)}
+                            disabled={wordCloudUpdatingQuestionId === q.questionId}
+                            onChange={() => handleToggleWordCloudRefresh(q)}
+                            aria-label={q.wordCloudRefreshPaused ? '開啟自動重新整理' : '停止自動重新整理'}
+                          />
+                          <span className="relative inline-flex h-5 w-9 shrink-0 rounded-full bg-[#9CA3AF] transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-[#16A34A] peer-checked:after:translate-x-4 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-gray-900" />
+                          {q.wordCloudRefreshPaused ? '關閉' : '開啟'}
+                        </label>
                         <span className="text-xs text-gray-400">
                           {q.wordCloudRefreshPaused ? '目前已停止自動刷新' : `目前每 ${q.wordCloudRefreshIntervalSec ?? 3} 秒刷新`}
                         </span>
@@ -826,9 +811,9 @@ export function HostPage() {
                     </div>
                   )}
                   {q.displayScene === 'spotlight' && (
-                    <div className="rounded-xl border border-gray-700/20 bg-gray-900/80 p-3 text-white">
+                    <div className="rounded-lg border border-indigo-200 bg-indigo-50/30 px-3 py-3">
                       <div className="flex flex-wrap items-center gap-2">
-                        <label className="flex min-w-0 flex-1 items-center gap-2 text-xs font-medium text-gray-200">
+                        <label className="flex min-w-[260px] flex-1 items-center gap-2 text-sm font-semibold text-gray-700">
                           顯示標語
                           <input
                             type="text"
@@ -838,7 +823,7 @@ export function HostPage() {
                               [q.questionId]: e.target.value,
                             }))}
                             maxLength={80}
-                            className="min-w-[160px] flex-1 rounded-lg border border-white/15 bg-black/30 px-3 py-1.5 text-sm text-white placeholder:text-gray-500 focus:border-white/40 focus:outline-none"
+                            className="h-9 min-w-[180px] flex-1 rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-900 shadow-sm placeholder:text-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
                             placeholder="We Are One"
                           />
                         </label>
@@ -846,7 +831,7 @@ export function HostPage() {
                           type="button"
                           onClick={() => handleToggleSpotlightSlogan(q)}
                           disabled={spotlightSloganUpdatingQuestionId === q.questionId}
-                          className="rounded-lg border border-white/15 bg-black/35 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/10 disabled:opacity-50"
+                          className="h-9 rounded-md bg-[#4F46E5] px-3 text-sm font-semibold text-white shadow-sm hover:bg-[#4338CA] disabled:bg-indigo-300"
                         >
                           {spotlightSloganUpdatingQuestionId === q.questionId
                             ? '更新中...'
@@ -859,9 +844,79 @@ export function HostPage() {
                   )}
                 </div>
               )}
+
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 pt-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSeedTarget(q)}
+                    className="rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                  >
+                    灌入測試資料
+                  </button>
+                </div>
+                <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+                    {q.status !== 'OPEN' && (
+                      <button
+                        onClick={() => openEditModal(q)}
+                        className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700 shadow-sm transition-colors hover:border-sky-300 hover:bg-sky-100"
+                      >
+                        編輯
+                      </button>
+                    )}
+                    <div className="relative" data-question-menu>
+                      <button
+                        type="button"
+                        onClick={() => setOpenQuestionMenuId((current) => (current === q.questionId ? null : q.questionId))}
+                        aria-expanded={openQuestionMenuId === q.questionId}
+                        className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
+                      >
+                        ...
+                      </button>
+	                      {openQuestionMenuId === q.questionId && (
+	                        <div className="absolute right-0 z-20 mt-2 w-44 overflow-hidden rounded-md border border-gray-200 bg-white p-1 shadow-lg">
+	                          <button
+	                            type="button"
+	                            onClick={() => {
+	                              setOpenQuestionMenuId(null);
+	                              handleQuestionLoadTest(q);
+	                            }}
+	                            disabled={loadTestingQuestionId === q.questionId}
+	                            className="block w-full rounded-sm px-3 py-2 text-left text-sm font-medium text-gray-900 hover:bg-gray-50 disabled:opacity-40"
+	                          >
+	                            {loadTestingQuestionId === q.questionId ? '壓測中...' : '500人壓測'}
+	                          </button>
+	                          <button
+	                            type="button"
+	                            onClick={() => {
+	                              setOpenQuestionMenuId(null);
+	                              handleResetQuestion(q);
+	                            }}
+	                            disabled={clearingQuestionId === q.questionId}
+	                            className="block w-full rounded-sm px-3 py-2 text-left text-sm font-medium text-gray-900 hover:bg-gray-50 disabled:opacity-40"
+	                          >
+	                            {clearingQuestionId === q.questionId ? '清除中...' : '清空此題作答'}
+	                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenQuestionMenuId(null);
+                              handleDeleteQuestion(q);
+                            }}
+                            disabled={deletingQuestionId === q.questionId}
+                            className="block w-full rounded-sm px-3 py-2 text-left text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-40"
+                          >
+                            {deletingQuestionId === q.questionId ? '刪除中...' : '刪除'}
+                          </button>
+	                        </div>
+	                      )}
+                    </div>
+                  </div>
+                </div>
             </div>
           </div>
-        ))}
+          );
+        })}
       </main>
 
       {editTarget && (
@@ -879,7 +934,7 @@ export function HostPage() {
                   value={editTitle}
                   onChange={(e) => setEditTitle(e.target.value)}
                   maxLength={500}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-indigo-500"
+                  className="w-full rounded-md border border-gray-200 px-3 py-2 focus:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-100"
                 />
               </div>
               <div>
@@ -902,8 +957,8 @@ export function HostPage() {
                       onClick={() => setEditScene(s.value as DisplayScene)}
                       className={`py-2 px-3 rounded-xl border text-sm font-medium transition-colors ${
                         editScene === s.value
-                          ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
-                          : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                          ? 'border-[#4F46E5] bg-indigo-50 text-[#4338CA] shadow-sm ring-1 ring-indigo-100'
+                          : 'border-gray-200 bg-white text-gray-600 hover:border-indigo-200 hover:bg-indigo-50/60 hover:text-indigo-700'
                       }`}
                     >
                       {s.label}
@@ -922,7 +977,7 @@ export function HostPage() {
                           value={editOptionLabels[opt.id] ?? opt.label}
                           onChange={(e) => setEditOptionLabels((prev) => ({ ...prev, [opt.id]: e.target.value }))}
                           maxLength={200}
-                          className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500"
+                          className="flex-1 rounded-md border border-gray-200 px-3 py-1.5 text-sm focus:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-100"
                           placeholder="選項名稱"
                         />
                         <input
@@ -931,7 +986,7 @@ export function HostPage() {
                           max={99999}
                           value={editOptionCounts[opt.id] ?? 0}
                           onChange={(e) => setEditOptionCounts((prev) => ({ ...prev, [opt.id]: Number(e.target.value) }))}
-                          className="w-24 px-3 py-1.5 border border-gray-200 rounded-lg text-sm text-right focus:outline-none focus:border-indigo-500"
+                          className="w-24 rounded-md border border-gray-200 px-3 py-1.5 text-right text-sm focus:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-100"
                         />
                         <span className="text-xs text-gray-400 w-6">票</span>
                       </div>
@@ -945,14 +1000,14 @@ export function HostPage() {
                 <button
                   type="button"
                   onClick={() => setEditTarget(null)}
-                  className="flex-1 py-3 border border-gray-200 rounded-xl text-gray-600 font-medium"
+                  className="flex-1 rounded-md border border-gray-200 py-3 font-medium text-gray-700 hover:bg-gray-50"
                 >
                   取消
                 </button>
                 <button
                   type="submit"
                   disabled={editLoading || !editTitle.trim()}
-                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-semibold disabled:bg-indigo-300"
+                  className="flex-1 rounded-md bg-[#4F46E5] py-3 font-semibold text-white hover:bg-[#4338CA] disabled:bg-indigo-300"
                 >
                   {editLoading ? '儲存中...' : '儲存變更'}
                 </button>
@@ -991,7 +1046,7 @@ export function HostPage() {
                       max={MAX_TEXT_SEED_COUNT}
                       value={seedTextCount}
                       onChange={(e) => setSeedTextCount(Number(e.target.value))}
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-right focus:outline-none focus:border-indigo-500"
+                      className="w-full rounded-md border border-gray-200 px-3 py-2 text-right focus:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-100"
                     />
                   </label>
                   <div className="rounded-xl bg-gray-50 border border-gray-100 px-3 py-2 text-sm text-gray-500">
@@ -1006,7 +1061,7 @@ export function HostPage() {
                   <button
                     type="button"
                     onClick={handleRandomSeed}
-                    className="w-full py-2 text-sm font-semibold rounded-xl border border-indigo-200 text-indigo-600 hover:bg-indigo-50"
+                    className="w-full rounded-md border border-gray-200 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
                   >
                     隨機 20-50 筆
                   </button>
@@ -1031,7 +1086,7 @@ export function HostPage() {
                   <button
                     type="button"
                     onClick={handleRandomSeed}
-                    className="w-full py-2 text-sm font-semibold rounded-xl border border-indigo-200 text-indigo-600 hover:bg-indigo-50"
+                    className="w-full rounded-md border border-gray-200 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
                   >
                     隨機 20-50 筆
                   </button>
@@ -1039,7 +1094,7 @@ export function HostPage() {
               )}
               {seedError && <p className="text-red-500 text-sm">{seedError}</p>}
               {seedLoading && seedProgress.total > 0 && (
-                <div className="text-sm text-indigo-600 bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2">
+                <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">
                   模擬灌入中... {seedProgress.done}/{seedProgress.total}
                 </div>
               )}
@@ -1047,14 +1102,14 @@ export function HostPage() {
                 <button
                   type="button"
                   onClick={() => setSeedTarget(null)}
-                  className="flex-1 py-3 border border-gray-200 rounded-xl text-gray-600 font-medium"
+                  className="flex-1 rounded-md border border-gray-200 py-3 font-medium text-gray-700 hover:bg-gray-50"
                 >
                   取消
                 </button>
                 <button
                   type="submit"
                   disabled={seedLoading}
-                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-semibold disabled:bg-indigo-300"
+                  className="flex-1 rounded-md bg-[#4F46E5] py-3 font-semibold text-white hover:bg-[#4338CA] disabled:bg-indigo-300"
                 >
                   {seedLoading ? '灌入中...' : '灌入資料'}
                 </button>
