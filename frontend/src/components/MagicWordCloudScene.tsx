@@ -3,9 +3,10 @@ import { useEffect, useRef } from 'react';
 interface Props {
   texts: string[];
   totalResponses: number;
+  refreshIntervalSec?: number;
+  refreshPaused?: boolean;
+  refreshNonce?: number;
 }
-
-type WordLevel = 'hero' | 'large' | 'medium' | 'small';
 
 interface Star {
   x: number;
@@ -26,34 +27,43 @@ interface Orb {
   opacity: number;
 }
 
-interface WordInstance {
-  id: number;
-  text: string;
+interface WordTarget {
   key: string;
+  text: string;
+  frequency: number;
   x: number;
   y: number;
   width: number;
   height: number;
   fontSize: number;
-  level: WordLevel;
-  vertical: boolean;
   rotation: number;
   warm: boolean;
   opacity: number;
   shadowBlur: number;
-  bornAt: number;
-  fadeDuration: number;
-  focus: boolean;
+}
+
+interface WordInstance extends WordTarget {
+  currentX: number;
+  currentY: number;
+  currentFontSize: number;
+  currentRotation: number;
+  currentOpacity: number;
+  fromX: number;
+  fromY: number;
+  fromFontSize: number;
+  fromRotation: number;
+  fromOpacity: number;
+  transitionStart: number;
+  transitionDuration: number;
   driftX: number;
   driftY: number;
   phase: number;
-  exitingAt?: number;
+  removing?: boolean;
 }
 
-const MAX_WORDS = 400;
 const FONT_FAMILY = '"Arial Black", "Helvetica Neue", sans-serif';
-
-let wordId = 0;
+const MIN_TRANSITION_MS = 1000;
+const MAX_TRANSITION_MS = 2000;
 
 function randomBetween(min: number, max: number) {
   return min + Math.random() * (max - min);
@@ -63,21 +73,16 @@ function randomInt(min: number, max: number) {
   return Math.floor(randomBetween(min, max + 1));
 }
 
-function chooseLevelStyle(level: WordLevel) {
-  if (level === 'hero') {
-    return { fontSize: randomBetween(60, 80), opacity: randomBetween(0.86, 1), shadowBlur: randomBetween(30, 40) };
-  }
-  if (level === 'large') {
-    return { fontSize: randomBetween(36, 50), opacity: randomBetween(0.8, 1), shadowBlur: randomBetween(18, 25) };
-  }
-  if (level === 'medium') {
-    return { fontSize: randomBetween(20, 30), opacity: randomBetween(0.5, 0.8), shadowBlur: randomBetween(12, 20) };
-  }
-  return { fontSize: randomBetween(12, 16), opacity: randomBetween(0.3, 0.6), shadowBlur: randomBetween(8, 14) };
+function easeInOut(t: number) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-function rectsOverlap(a: WordInstance, b: WordInstance) {
-  const padding = 24;
+function normalizeWord(text: string) {
+  return text.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function rectsOverlap(a: WordTarget, b: WordTarget) {
+  const padding = Math.max(2, Math.min(a.fontSize, b.fontSize) * 0.08);
   return !(
     a.x + a.width / 2 + padding < b.x - b.width / 2 ||
     a.x - a.width / 2 - padding > b.x + b.width / 2 ||
@@ -111,72 +116,6 @@ function buildOrbs(width: number, height: number): Orb[] {
   }));
 }
 
-function buildLevelsForAnswer(): WordLevel[] {
-  const roll = Math.random();
-  if (roll < 0.12) return ['hero'];
-  if (roll < 0.38) return ['large'];
-  if (roll < 0.78) return ['medium'];
-  return ['small'];
-}
-
-function normalizeWord(text: string) {
-  return text.trim().replace(/\s+/g, ' ').toLowerCase();
-}
-
-function createWordInstance(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  level: WordLevel,
-  width: number,
-  height: number,
-  existing: WordInstance[],
-  animate: boolean,
-): WordInstance | null {
-  const style = chooseLevelStyle(level);
-  const vertical = Math.random() < 0.3;
-  const rotation = vertical ? (Math.random() < 0.5 ? Math.PI / 2 : -Math.PI / 2) : 0;
-  const warm = Math.random() < 0.6;
-  ctx.font = `900 ${style.fontSize}px ${FONT_FAMILY}`;
-  const measured = Math.max(ctx.measureText(text).width, style.fontSize * 1.5);
-  const boxWidth = vertical ? style.fontSize * 1.25 : measured;
-  const boxHeight = vertical ? measured : style.fontSize * 1.2;
-  const margin = Math.max(28, style.fontSize * 0.7);
-
-  let candidate: WordInstance | null = null;
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    const x = randomBetween(margin + boxWidth / 2, Math.max(margin + boxWidth / 2, width - margin - boxWidth / 2));
-    const y = randomBetween(margin + boxHeight / 2, Math.max(margin + boxHeight / 2, height - margin - boxHeight / 2));
-    const next: WordInstance = {
-      id: wordId++,
-      text,
-      key: normalizeWord(text),
-      x,
-      y,
-      width: boxWidth,
-      height: boxHeight,
-      fontSize: style.fontSize,
-      level,
-      vertical,
-      rotation,
-      warm,
-      opacity: style.opacity,
-      shadowBlur: style.shadowBlur,
-      bornAt: performance.now(),
-      fadeDuration: animate && level !== 'hero' ? 1500 : 0,
-      focus: animate && level === 'hero',
-      driftX: randomBetween(-2.5, 2.5),
-      driftY: randomBetween(-2.5, 2.5),
-      phase: randomBetween(0, Math.PI * 2),
-    };
-    candidate = next;
-    if (!existing.some((item) => rectsOverlap(item, next))) {
-      return next;
-    }
-  }
-
-  return candidate && !existing.some((item) => rectsOverlap(item, candidate)) ? candidate : null;
-}
-
 function drawFourPointStar(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, opacity: number) {
   ctx.save();
   ctx.globalAlpha = opacity;
@@ -193,119 +132,332 @@ function drawFourPointStar(ctx: CanvasRenderingContext2D, x: number, y: number, 
   ctx.restore();
 }
 
-export function MagicWordCloudScene({ texts, totalResponses }: Props) {
+function buildWordEntries(texts: string[]) {
+  const map = new Map<string, { text: string; frequency: number }>();
+  texts.forEach((rawText) => {
+    const key = normalizeWord(rawText);
+    if (!key) return;
+    const current = map.get(key);
+    if (current) {
+      current.frequency += 1;
+      return;
+    }
+    map.set(key, { text: rawText.trim().replace(/\s+/g, ' '), frequency: 1 });
+  });
+  return [...map.entries()]
+    .map(([key, value]) => ({ key, ...value }))
+    .sort((a, b) => b.frequency - a.frequency || a.text.localeCompare(b.text));
+}
+
+function measureWord(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  fontSize: number,
+  rotation: number,
+) {
+  ctx.font = `900 ${fontSize}px ${FONT_FAMILY}`;
+  const rawWidth = Math.max(ctx.measureText(text).width, fontSize * 1.6);
+  const rawHeight = fontSize * 1.18;
+  const vertical = Math.abs(rotation) > 0.1;
+  return {
+    width: vertical ? rawHeight : rawWidth,
+    height: vertical ? rawWidth : rawHeight,
+  };
+}
+
+function makeTargetAt(
+  ctx: CanvasRenderingContext2D,
+  entry: { key: string; text: string; frequency: number },
+  fontSize: number,
+  x: number,
+  y: number,
+  rotation: number,
+  warm: boolean,
+): WordTarget {
+  const measured = measureWord(ctx, entry.text, fontSize, rotation);
+  return {
+    key: entry.key,
+    text: entry.text,
+    frequency: entry.frequency,
+    x,
+    y,
+    width: measured.width,
+    height: measured.height,
+    fontSize,
+    rotation,
+    warm,
+    opacity: warm ? randomBetween(0.78, 1) : randomBetween(0.68, 0.96),
+    shadowBlur: fontSize * (warm ? 0.58 : 0.46),
+  };
+}
+
+function buildGridCells(width: number, height: number) {
+  const cols = 4;
+  const rows = 3;
+  const cells: { x: number; y: number; width: number; height: number }[] = [];
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      cells.push({
+        x: (col + 0.5) * (width / cols),
+        y: (row + 0.5) * (height / rows),
+        width: width / cols,
+        height: height / rows,
+      });
+    }
+  }
+  const centerX = width / 2;
+  const centerY = height / 2;
+  return cells.sort((a, b) => {
+    const distanceA = Math.hypot(a.x - centerX, a.y - centerY);
+    const distanceB = Math.hypot(b.x - centerX, b.y - centerY);
+    return distanceB - distanceA;
+  });
+}
+
+function clampToBounds(target: WordTarget, width: number, height: number, edgePadding: number) {
+  return {
+    x: Math.min(width - target.width / 2 - edgePadding, Math.max(target.width / 2 + edgePadding, target.x)),
+    y: Math.min(height - target.height / 2 - edgePadding, Math.max(target.height / 2 + edgePadding, target.y)),
+  };
+}
+
+function findGridPosition(
+  ctx: CanvasRenderingContext2D,
+  entry: { key: string; text: string; frequency: number },
+  fontSize: number,
+  rotation: number,
+  warm: boolean,
+  cell: { x: number; y: number; width: number; height: number },
+  placed: WordTarget[],
+  width: number,
+  height: number,
+  edgePadding: number,
+) {
+  const directions = [
+    [0, 0],
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+    [1, 1],
+    [-1, 1],
+    [1, -1],
+    [-1, -1],
+  ];
+
+  for (let shrink = 0; shrink <= 3; shrink += 1) {
+    const nextSize = fontSize * Math.pow(0.85, shrink);
+    const maxRadius = Math.max(cell.width, cell.height) * 1.45;
+    const step = Math.max(10, nextSize * 0.46);
+    for (let radius = 0; radius <= maxRadius; radius += step) {
+      for (let dirIndex = 0; dirIndex < directions.length; dirIndex += 1) {
+        const [dx, dy] = directions[dirIndex];
+        const angleOffset = radius === 0 ? 0 : randomBetween(-step * 0.35, step * 0.35);
+        const candidate = makeTargetAt(
+          ctx,
+          entry,
+          nextSize,
+          cell.x + dx * radius + angleOffset,
+          cell.y + dy * radius + randomBetween(-step * 0.35, step * 0.35),
+          rotation,
+          warm,
+        );
+        const clamped = clampToBounds(candidate, width, height, edgePadding);
+        const target = { ...candidate, ...clamped };
+        if (!placed.some((word) => rectsOverlap(word, target))) {
+          return target;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function buildLayout(ctx: CanvasRenderingContext2D, texts: string[], width: number, height: number) {
+  const entries = buildWordEntries(texts);
+  if (entries.length === 0) return [];
+
+  const area = width * height;
+  const vmin = Math.min(width, height);
+  const baseSize = Math.sqrt(area / entries.length) * 0.36;
+  const minFrequency = Math.min(...entries.map((entry) => entry.frequency));
+  const maxFrequency = Math.max(...entries.map((entry) => entry.frequency));
+  const placed: WordTarget[] = [];
+  const edgePadding = Math.max(10, Math.min(width, height) * 0.014);
+  const cells = buildGridCells(width, height);
+
+  if (entries.length <= 3) {
+    const size = width * 0.06;
+    const positions = entries.length === 1
+      ? [{ x: width / 2, y: height / 2 }]
+      : entries.length === 2
+        ? [{ x: width * 0.32, y: height / 2 }, { x: width * 0.68, y: height / 2 }]
+        : [{ x: width * 0.22, y: height / 2 }, { x: width * 0.5, y: height / 2 }, { x: width * 0.78, y: height / 2 }];
+    return entries.map((entry, index) => makeTargetAt(
+      ctx,
+      entry,
+      size,
+      positions[index].x,
+      positions[index].y,
+      0,
+      index % 2 === 0,
+    ));
+  }
+
+  entries.forEach((entry, index) => {
+    const frequencyRatio = maxFrequency === minFrequency
+      ? 0.5
+      : (entry.frequency - minFrequency) / (maxFrequency - minFrequency);
+    const frequencyWeight = 0.6 + frequencyRatio * 1.4;
+    const maxSize = entries.length < 10 ? width * 0.1 : vmin * 0.18;
+    const fontSize = Math.max(10, Math.min(maxSize, baseSize * frequencyWeight));
+    const rotation = entries.length < 10 ? 0 : Math.random() < 0.13 ? (Math.random() < 0.5 ? Math.PI / 2 : -Math.PI / 2) : 0;
+    const warm = index % 3 === 0 || frequencyRatio > 0.55;
+    const cell = cells[index % cells.length];
+    const target = findGridPosition(ctx, entry, fontSize, rotation, warm, cell, placed, width, height, edgePadding);
+    if (target) {
+      placed.push(target);
+    }
+  });
+
+  return placed;
+}
+
+function applyTargets(instances: WordInstance[], targets: WordTarget[], now: number) {
+  const currentByKey = new Map(instances.map((word) => [word.key, word]));
+  const targetKeys = new Set(targets.map((target) => target.key));
+  const next: WordInstance[] = [];
+
+  targets.forEach((target) => {
+    const existing = currentByKey.get(target.key);
+    if (existing) {
+      next.push({
+        ...existing,
+        ...target,
+        fromX: existing.currentX,
+        fromY: existing.currentY,
+        fromFontSize: existing.currentFontSize,
+        fromRotation: existing.currentRotation,
+        fromOpacity: existing.currentOpacity,
+        transitionStart: now,
+        transitionDuration: randomBetween(MIN_TRANSITION_MS, MAX_TRANSITION_MS),
+        removing: false,
+      });
+      return;
+    }
+    next.push({
+      ...target,
+      currentX: target.x,
+      currentY: target.y,
+      currentFontSize: target.fontSize,
+      currentRotation: target.rotation,
+      currentOpacity: 0,
+      fromX: target.x,
+      fromY: target.y,
+      fromFontSize: target.fontSize,
+      fromRotation: target.rotation,
+      fromOpacity: 0,
+      transitionStart: now,
+      transitionDuration: randomBetween(MIN_TRANSITION_MS, MAX_TRANSITION_MS),
+      driftX: randomBetween(-1.8, 1.8),
+      driftY: randomBetween(-1.8, 1.8),
+      phase: randomBetween(0, Math.PI * 2),
+    });
+  });
+
+  instances.forEach((word) => {
+    if (targetKeys.has(word.key)) return;
+    next.push({
+      ...word,
+      fromX: word.currentX,
+      fromY: word.currentY,
+      fromFontSize: word.currentFontSize,
+      fromRotation: word.currentRotation,
+      fromOpacity: word.currentOpacity,
+      x: word.currentX,
+      y: word.currentY,
+      fontSize: word.currentFontSize,
+      rotation: word.currentRotation,
+      opacity: 0,
+      transitionStart: now,
+      transitionDuration: randomBetween(MIN_TRANSITION_MS, MAX_TRANSITION_MS),
+      removing: true,
+    });
+  });
+
+  return next;
+}
+
+export function MagicWordCloudScene({
+  texts,
+  totalResponses,
+  refreshPaused = false,
+  refreshNonce = 0,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const wordsRef = useRef<WordInstance[]>([]);
   const starsRef = useRef<Star[]>([]);
   const orbsRef = useRef<Orb[]>([]);
-  const prevTextsRef = useRef<string[]>([]);
-  const prevTotalResponsesRef = useRef(0);
   const sizeRef = useRef({ width: 0, height: 0, dpr: 1 });
   const rafRef = useRef<number | null>(null);
+  const layoutSignatureRef = useRef('');
 
   useEffect(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
 
-    const resize = () => {
+    const relayout = () => {
       const rect = container.getBoundingClientRect();
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const width = Math.max(320, rect.width);
       const height = Math.max(320, rect.height);
-      const previousSize = sizeRef.current;
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       const ctx = canvas.getContext('2d');
       ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
-      if (previousSize.width > 0 && previousSize.height > 0) {
-        const scaleX = width / previousSize.width;
-        const scaleY = height / previousSize.height;
-        wordsRef.current = wordsRef.current.map((word) => ({
-          ...word,
-          x: word.x * scaleX,
-          y: word.y * scaleY,
-        }));
-      }
       sizeRef.current = { width, height, dpr };
       starsRef.current = buildStars(width, height);
       orbsRef.current = buildOrbs(width, height);
+      if (ctx && texts.length > 0) {
+        const targets = buildLayout(ctx, texts, width, height);
+        wordsRef.current = applyTargets(wordsRef.current, targets, performance.now());
+      }
     };
 
-    resize();
-    const observer = new ResizeObserver(resize);
+    relayout();
+    const observer = new ResizeObserver(relayout);
     observer.observe(container);
-    window.addEventListener('resize', resize);
+    window.addEventListener('resize', relayout);
     return () => {
       observer.disconnect();
-      window.removeEventListener('resize', resize);
+      window.removeEventListener('resize', relayout);
     };
   }, []);
 
   useEffect(() => {
+    if (refreshPaused) return;
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
-    if (!ctx) return;
-
-    const previous = prevTextsRef.current;
-    const wasReset = totalResponses === 0 || totalResponses < prevTotalResponsesRef.current || texts.length === 0;
-    if (wasReset) {
-      wordsRef.current = [];
-      prevTextsRef.current = texts;
-      prevTotalResponsesRef.current = totalResponses;
-      return;
-    }
-
-    const incoming = texts.length > previous.length
-      ? texts.filter((_, index) => index >= previous.length)
-      : previous.length > 0 && texts.length === previous.length && texts[texts.length - 1] !== previous[previous.length - 1]
-        ? [texts[texts.length - 1]]
-        : [];
-    const isHistory = previous.length === 0 && texts.length > 0;
-    const newTexts = isHistory ? texts : incoming;
     const { width, height } = sizeRef.current;
-    if (width === 0 || height === 0 || newTexts.length === 0) {
-      prevTextsRef.current = texts;
-      prevTotalResponsesRef.current = totalResponses;
+    if (!ctx || width === 0 || height === 0) return;
+
+    if (totalResponses === 0 || texts.length === 0) {
+      wordsRef.current = [];
+      layoutSignatureRef.current = '';
       return;
     }
 
-    const nextWords = [...wordsRef.current];
-    const existingKeys = new Set(nextWords.map((word) => word.key));
-    newTexts.forEach((text) => {
-      const key = normalizeWord(text);
-      if (!key || existingKeys.has(key)) return;
-      buildLevelsForAnswer().forEach((level, index) => {
-        const instance = createWordInstance(ctx, text, level, width, height, nextWords, !isHistory);
-        if (instance) {
-          instance.focus = !isHistory && index === 0 && level === 'hero';
-          nextWords.push(instance);
-          existingKeys.add(key);
-        }
-      });
-    });
-
-    const overflow = nextWords.length - MAX_WORDS;
-    if (overflow > 0 && isHistory) {
-      wordsRef.current = nextWords.slice(-MAX_WORDS);
-      prevTextsRef.current = texts;
-      prevTotalResponsesRef.current = totalResponses;
-      return;
-    }
-    if (overflow > 0) {
-      const now = performance.now();
-      nextWords.slice(0, overflow).forEach((word) => {
-        word.exitingAt = now;
-      });
-    }
-
-    wordsRef.current = nextWords;
-    prevTextsRef.current = texts;
-    prevTotalResponsesRef.current = totalResponses;
-  }, [texts, totalResponses]);
+    const signature = `${refreshNonce}:${texts.length}:${texts.join('\u0001')}`;
+    if (signature === layoutSignatureRef.current) return;
+    layoutSignatureRef.current = signature;
+    const targets = buildLayout(ctx, texts, width, height);
+    wordsRef.current = applyTargets(wordsRef.current, targets, performance.now());
+  }, [texts, totalResponses, refreshPaused, refreshNonce]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -354,28 +506,28 @@ export function MagicWordCloudScene({ texts, totalResponses }: Props) {
 
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      wordsRef.current = wordsRef.current.filter((word) => !word.exitingAt || now - word.exitingAt < 1000);
+      wordsRef.current = wordsRef.current.filter((word) => !(word.removing && word.currentOpacity <= 0.01));
       wordsRef.current.forEach((word) => {
-        const age = now - word.bornAt;
-        const fadeProgress = word.fadeDuration > 0 ? Math.min(1, age / word.fadeDuration) : 1;
-        const exitProgress = word.exitingAt ? Math.max(0, 1 - (now - word.exitingAt) / 1000) : 1;
-        const focusProgress = word.focus ? Math.min(1, age / 500) : 1;
-        const focusScale = word.focus ? 1.2 - 0.2 * focusProgress : 1;
-        const glowBoost = word.focus ? 2 - focusProgress : 1;
-        const driftX = Math.sin(now * 0.00022 + word.phase) * word.driftX;
-        const driftY = Math.cos(now * 0.00018 + word.phase) * word.driftY;
+        const progress = Math.min(1, Math.max(0, (now - word.transitionStart) / word.transitionDuration));
+        const eased = easeInOut(progress);
+        word.currentX = word.fromX + (word.x - word.fromX) * eased;
+        word.currentY = word.fromY + (word.y - word.fromY) * eased;
+        word.currentFontSize = word.fromFontSize + (word.fontSize - word.fromFontSize) * eased;
+        word.currentRotation = word.fromRotation + (word.rotation - word.fromRotation) * eased;
+        word.currentOpacity = word.fromOpacity + (word.opacity - word.fromOpacity) * eased;
 
+        const driftX = Math.sin(now * 0.0002 + word.phase) * word.driftX;
+        const driftY = Math.cos(now * 0.00018 + word.phase) * word.driftY;
         ctx.save();
-        ctx.translate(word.x + driftX, word.y + driftY);
-        if (word.vertical) {
-          ctx.rotate(word.rotation);
+        ctx.translate(word.currentX + driftX, word.currentY + driftY);
+        if (Math.abs(word.currentRotation) > 0.01) {
+          ctx.rotate(word.currentRotation);
         }
-        ctx.scale(focusScale, focusScale);
-        ctx.globalAlpha = word.opacity * fadeProgress * exitProgress;
-        ctx.font = `900 ${word.fontSize}px ${FONT_FAMILY}`;
+        ctx.globalAlpha = word.currentOpacity;
+        ctx.font = `900 ${word.currentFontSize}px ${FONT_FAMILY}`;
         ctx.fillStyle = word.warm ? '#E8D5A3' : '#FFFFFF';
         ctx.shadowColor = word.warm ? '#D4A843' : '#8899BB';
-        ctx.shadowBlur = word.shadowBlur * glowBoost;
+        ctx.shadowBlur = word.shadowBlur;
         ctx.fillText(word.text, 0, 0);
         ctx.restore();
       });

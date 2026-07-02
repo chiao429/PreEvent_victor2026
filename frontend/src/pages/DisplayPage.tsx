@@ -67,6 +67,7 @@ export function DisplayPage() {
   const isMapScene = question?.type !== 'TEXT' && derivedScene === 'map3d';
   const isMapHudScene = question?.type !== 'TEXT' && derivedScene === 'map3d-hud';
   const showAnswers = question?.displayMode === 'results';
+  const textRevealStep = isWordCloudScene ? 12 : 1;
   const revealTargetSignature = useMemo(() => {
     if (!question || !showAnswers) return '';
     return JSON.stringify({
@@ -88,6 +89,7 @@ export function DisplayPage() {
   const displayedTotalResponses = showAnswers ? revealedTotalResponses : 0;
   const showQuestionQr = Boolean(question && !showAnswers);
   const hideHeaderChrome = projectorMode;
+  const projectorHeaderQuestion = projectorMode ? question : null;
   const qrCodeUrl = joinUrl
     ? `https://api.qrserver.com/v1/create-qr-code/?size=360x360&data=${encodeURIComponent(joinUrl)}`
     : '';
@@ -120,81 +122,101 @@ export function DisplayPage() {
         return next;
       });
       setRevealedTotalResponses((current) => Math.min(current + 1, question.totalResponses));
-      setRevealedTextCount((current) => Math.min(current + 1, question.recentTexts.length));
+      setRevealedTextCount((current) => Math.min(current + textRevealStep, question.recentTexts.length));
     }, 180);
 
     return () => window.clearInterval(interval);
-  }, [question, revealTargetSignature, showAnswers]);
+  }, [question, revealTargetSignature, showAnswers, textRevealStep]);
 
   return (
     <div
       ref={containerRef}
-      className={`min-h-screen bg-gray-950 text-white flex flex-col transition-colors ${projectorMode ? 'projector-mode' : ''}`}
+      className={`relative min-h-screen bg-gray-950 text-white flex flex-col transition-colors ${projectorMode ? 'projector-mode' : ''}`}
     >
       {!showQuestionQr && (
         <div
-          className={`relative flex items-center gap-6 px-8 border-b border-gray-800 transition-all duration-300 ${
-            projectorMode ? 'min-h-[132px] py-5' : 'py-4'
+          className={`grid grid-cols-[minmax(190px,24vw)_minmax(0,1fr)_minmax(190px,24vw)] items-center gap-4 px-6 sm:px-8 border-b border-gray-800 transition-all duration-300 ${
+            projectorHeaderQuestion ? 'min-h-[132px] py-4' : 'min-h-[72px] py-3'
           }`}
         >
-          {question && qrCodeUrl && (
-            <div className="absolute left-8 top-1/2 -translate-y-1/2 flex items-center gap-3">
-              <div className="bg-white rounded-xl p-2 shadow-2xl">
-                <img
-                  src={qrCodeUrl}
-                  alt="填寫答案 QR Code"
-                  className="w-[88px] h-[88px] object-contain"
-                />
-              </div>
-              <div className="hidden lg:block text-left">
-                <p className="text-xs uppercase tracking-[0.3em] text-green-300/80">填寫答案</p>
-              </div>
-            </div>
-          )}
-          <div className={`flex items-center gap-3 ${hideHeaderChrome ? 'opacity-0 pointer-events-none' : ''}`}>
-            <span className="text-gray-400 text-sm font-medium">PreEvent Live</span>
-            <div className="flex items-center gap-2">
-              <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-              <span className="text-xs text-gray-500">{connected ? '即時連線中' : '連線中斷'}</span>
-            </div>
-          </div>
-          <div className="flex-1 text-center overflow-hidden">
-            {question ? (
-              <>
-                <div className="absolute right-8 top-4">
-                  <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.4em] text-green-300/80">
-                    <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-                    掃描 QR CODE 作答
-                  </div>
+          <div className="flex min-w-0 items-center gap-3 justify-self-start">
+            {projectorHeaderQuestion && qrCodeUrl && (
+              <div className="flex shrink-0 items-center gap-3">
+                <div className="bg-white rounded-xl p-2 shadow-2xl">
+                  <img
+                    src={qrCodeUrl}
+                    alt="填寫答案 QR Code"
+                    className="w-[88px] h-[88px] object-contain"
+                  />
                 </div>
-                <h2 className="mx-auto max-w-[min(60vw,900px)] text-2xl md:text-3xl font-semibold text-white leading-tight text-center">
-                  {question.title}
-                </h2>
-              </>
-            ) : (
-              <span className="text-sm text-gray-500">PreEvent Live</span>
+                <div className="hidden xl:block text-left">
+                  <p className="text-xs uppercase tracking-[0.3em] text-green-300/80">填寫答案</p>
+                </div>
+              </div>
             )}
+            <div className={`flex min-w-0 items-center gap-3 ${hideHeaderChrome ? 'opacity-0 pointer-events-none' : ''}`}>
+              <span className="hidden xl:inline text-gray-400 text-sm font-medium">PreEvent Live</span>
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 shrink-0 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+                <span className="truncate text-xs text-gray-500">{connected ? '即時連線中' : '連線中斷'}</span>
+              </div>
+            </div>
           </div>
-          <div className={`flex items-center gap-3 ${hideHeaderChrome ? 'opacity-0 pointer-events-none' : ''}`}>
-            <span className="text-gray-500 text-xs font-mono">{sessionId}</span>
-            <div className="flex gap-2">
+          <div className="min-w-0 text-center overflow-hidden">
+            {projectorHeaderQuestion ? (
+              <h2 className="mx-auto max-w-[920px] text-2xl md:text-3xl font-semibold text-white leading-tight text-center">
+                {projectorHeaderQuestion.title}
+              </h2>
+            ) : !question ? (
+              <span className="text-sm text-gray-500">PreEvent Live</span>
+            ) : null}
+          </div>
+          <div className="flex min-w-0 flex-col items-end gap-2 justify-self-end text-right">
+            {projectorHeaderQuestion && (
+              <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.3em] text-green-300/80">
+                <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                掃描 QR CODE 作答
+              </div>
+            )}
+            <div className={`flex max-w-full items-center gap-3 ${hideHeaderChrome ? 'opacity-0 pointer-events-none' : ''}`}>
+              <span className="truncate text-gray-500 text-xs font-mono">{sessionId}</span>
               {!projectorMode ? (
                 <button
                   onClick={enterProjectorMode}
-                  className="px-3 py-1.5 text-xs uppercase tracking-widest border border-white/20 rounded-full text-white/70 hover:text-white"
+                  className="shrink-0 px-3 py-1.5 text-xs uppercase tracking-widest border border-white/20 rounded-full text-white/70 hover:text-white"
                 >
                   投影模式
                 </button>
               ) : (
                 <button
                   onClick={exitProjectorMode}
-                  className="px-3 py-1.5 text-xs uppercase tracking-widest border border-white/20 rounded-full text-white/70 hover:text-white"
+                  className="shrink-0 px-3 py-1.5 text-xs uppercase tracking-widest border border-white/20 rounded-full text-white/70 hover:text-white"
                 >
                   離開投影
                 </button>
               )}
             </div>
           </div>
+        </div>
+      )}
+      {showQuestionQr && (
+        <div className={`absolute right-8 top-6 z-20 flex items-center gap-3 ${hideHeaderChrome ? 'opacity-0 pointer-events-none' : ''}`}>
+          <span className="text-gray-500 text-xs font-mono">{sessionId}</span>
+          {!projectorMode ? (
+            <button
+              onClick={enterProjectorMode}
+              className="px-3 py-1.5 text-xs uppercase tracking-widest border border-white/20 rounded-full text-white/70 hover:text-white"
+            >
+              投影模式
+            </button>
+          ) : (
+            <button
+              onClick={exitProjectorMode}
+              className="px-3 py-1.5 text-xs uppercase tracking-widest border border-white/20 rounded-full text-white/70 hover:text-white"
+            >
+              離開投影
+            </button>
+          )}
         </div>
       )}
 
@@ -245,9 +267,10 @@ export function DisplayPage() {
           isSpotlightScene ? (
             <div className="absolute inset-0">
               <SpotlightScene
-                sessionId={sessionId ?? ''}
                 questionId={question.id}
-                fallbackTexts={displayedRecentTexts}
+                fallbackTexts={question.recentTexts}
+                sloganText={question.spotlightSloganText}
+                sloganVisible={question.spotlightSloganVisible}
               />
             </div>
           ) : isWordCloudScene ? (
@@ -255,15 +278,18 @@ export function DisplayPage() {
               <MagicWordCloudScene
                 texts={displayedRecentTexts}
                 totalResponses={displayedTotalResponses}
+                refreshIntervalSec={question.wordCloudRefreshIntervalSec}
+                refreshPaused={question.wordCloudRefreshPaused}
+                refreshNonce={question.wordCloudRefreshNonce}
               />
             </div>
           ) : isMapScene ? (
             <div className="absolute inset-0">
-              <ThreeMapScene options={displayedOptions} sessionId={sessionId ?? ''} />
+              <ThreeMapScene options={displayedOptions} />
             </div>
           ) : isMapHudScene ? (
             <div className="absolute inset-0">
-              <ThreeMapSceneHUD options={displayedOptions} sessionId={sessionId ?? ''} />
+              <ThreeMapSceneHUD options={displayedOptions} />
             </div>
           ) : (
             <div className="w-full max-w-4xl">

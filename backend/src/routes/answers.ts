@@ -22,104 +22,7 @@ const seedAnswersSchema = z.object({
 });
 
 const LOAD_TEST_ANSWER_COUNT = 500;
-
-type PendingQuestionStats = {
-  sessionId: string;
-  questionId: string;
-  totalResponses: number;
-  optionCounts: Record<string, number>;
-  recentTexts: string[];
-};
-
-const pendingQuestionStats = new Map<string, PendingQuestionStats>();
-let flushTimer: NodeJS.Timeout | null = null;
-
-function getStatsKey(sessionId: string, questionId: string) {
-  return `${sessionId}/${questionId}`;
-}
-
-function enqueueQuestionStats(
-  sessionId: string,
-  questionId: string,
-  payload: { optionIds?: string[]; textValue?: string },
-) {
-  const key = getStatsKey(sessionId, questionId);
-  const pending = pendingQuestionStats.get(key) ?? {
-    sessionId,
-    questionId,
-    totalResponses: 0,
-    optionCounts: {},
-    recentTexts: [],
-  };
-
-  pending.totalResponses += 1;
-  payload.optionIds?.forEach((id) => {
-    pending.optionCounts[id] = (pending.optionCounts[id] ?? 0) + 1;
-  });
-  if (payload.textValue) {
-    pending.recentTexts.push(payload.textValue);
-  }
-
-  pendingQuestionStats.set(key, pending);
-}
-
-async function flushQuestionStats() {
-  if (pendingQuestionStats.size === 0) return;
-
-  const entries = [...pendingQuestionStats.entries()];
-  pendingQuestionStats.clear();
-
-  await Promise.all(entries.map(async ([key, pending]) => {
-    const questionRef = db
-      .collection('sessions').doc(pending.sessionId)
-      .collection('questions').doc(pending.questionId);
-
-    try {
-      await db.runTransaction(async (tx) => {
-        const questionSnap = await tx.get(questionRef);
-        if (!questionSnap.exists) return;
-
-        const updates: Record<string, unknown> = {
-          totalResponses: FieldValue.increment(pending.totalResponses),
-        };
-        Object.entries(pending.optionCounts).forEach(([optionId, count]) => {
-          updates[`optionCounts.${optionId}`] = FieldValue.increment(count);
-        });
-
-        if (pending.recentTexts.length > 0) {
-          const currentTexts: string[] = questionSnap.data()?.recentTexts ?? [];
-          updates.recentTexts = [...currentTexts, ...pending.recentTexts].slice(-20);
-        }
-
-        tx.update(questionRef, updates);
-      });
-    } catch (err) {
-      console.error('[answers] stats flush error:', err);
-      const current = pendingQuestionStats.get(key) ?? {
-        sessionId: pending.sessionId,
-        questionId: pending.questionId,
-        totalResponses: 0,
-        optionCounts: {},
-        recentTexts: [],
-      };
-      current.totalResponses += pending.totalResponses;
-      Object.entries(pending.optionCounts).forEach(([optionId, count]) => {
-        current.optionCounts[optionId] = (current.optionCounts[optionId] ?? 0) + count;
-      });
-      current.recentTexts.push(...pending.recentTexts);
-      pendingQuestionStats.set(key, current);
-    }
-  }));
-}
-
-function ensureStatsFlushTimer() {
-  if (flushTimer) return;
-  flushTimer = setInterval(() => {
-    flushQuestionStats().catch((err) => console.error('[answers] stats flush loop error:', err));
-  }, 1000);
-}
-
-ensureStatsFlushTimer();
+const MAX_RECENT_TEXTS = 400;
 
 // POST /api/sessions/:id/questions/:qid/answers — 觀眾送出答案
 answerRouter.post(
@@ -143,8 +46,6 @@ answerRouter.post(
       .collection('answers').doc(respondentId);
 
     try {
-      let statsPayload: { optionIds?: string[]; textValue?: string } | null = null;
-
       await db.runTransaction(async (tx) => {
         const [answerSnap, questionSnap] = await Promise.all([
           tx.get(answerRef),
@@ -161,10 +62,7 @@ answerRouter.post(
           throw Object.assign(new Error('Question is not open'), { code: 409 });
         }
 
-        if (answerSnap.exists) {
-          throw Object.assign(new Error('Already answered'), { code: 409 });
-        }
-
+        const isNew = !answerSnap.exists;
         const type: string = questionData.type;
 
         if (type === 'TEXT') {
@@ -172,7 +70,18 @@ answerRouter.post(
             throw Object.assign(new Error('textValue required for TEXT question'), { code: 400 });
           }
           tx.set(answerRef, { textValue, createdAt: FieldValue.serverTimestamp() });
-          statsPayload = { textValue };
+
+          const currentTexts: string[] = questionData.recentTexts ?? [];
+          const newTexts = [...currentTexts, textValue].slice(-MAX_RECENT_TEXTS);
+
+          if (isNew) {
+            tx.update(questionRef, {
+              totalResponses: FieldValue.increment(1),
+              recentTexts: newTexts,
+            });
+          } else {
+            tx.update(questionRef, { recentTexts: newTexts });
+          }
           return;
         }
 
@@ -181,8 +90,24 @@ answerRouter.post(
             throw Object.assign(new Error('optionId required for SINGLE_CHOICE'), { code: 400 });
           }
 
-          tx.set(answerRef, { optionId, createdAt: FieldValue.serverTimestamp() });
-          statsPayload = { optionIds: [optionId] };
+          if (isNew) {
+            tx.update(questionRef, {
+              [`optionCounts.${optionId}`]: FieldValue.increment(1),
+              totalResponses: FieldValue.increment(1),
+            });
+            tx.set(answerRef, { optionId, createdAt: FieldValue.serverTimestamp() });
+          } else {
+            const prevOptionId: string | undefined = answerSnap.data()?.optionId;
+            if (prevOptionId === optionId) return;
+            const updates: Record<string, unknown> = {
+              [`optionCounts.${optionId}`]: FieldValue.increment(1),
+            };
+            if (prevOptionId) {
+              updates[`optionCounts.${prevOptionId}`] = FieldValue.increment(-1);
+            }
+            tx.update(questionRef, updates);
+            tx.set(answerRef, { optionId, createdAt: FieldValue.serverTimestamp() });
+          }
           return;
         }
 
@@ -191,17 +116,40 @@ answerRouter.post(
             throw Object.assign(new Error('optionIds required for MULTI_CHOICE'), { code: 400 });
           }
 
-          tx.set(answerRef, { optionIds, createdAt: FieldValue.serverTimestamp() });
-          statsPayload = { optionIds };
+          if (isNew) {
+            const updates: Record<string, unknown> = {
+              totalResponses: FieldValue.increment(1),
+            };
+            optionIds.forEach((id) => {
+              updates[`optionCounts.${id}`] = FieldValue.increment(1);
+            });
+            tx.update(questionRef, updates);
+            tx.set(answerRef, { optionIds, createdAt: FieldValue.serverTimestamp() });
+          } else {
+            const prevOptionIds: string[] = answerSnap.data()?.optionIds ?? [];
+            const isSame =
+              prevOptionIds.length === optionIds.length &&
+              prevOptionIds.every((id) => optionIds.includes(id));
+            if (isSame) return;
+
+            const updates: Record<string, unknown> = {};
+            prevOptionIds
+              .filter((id) => !optionIds.includes(id))
+              .forEach((id) => { updates[`optionCounts.${id}`] = FieldValue.increment(-1); });
+            optionIds
+              .filter((id) => !prevOptionIds.includes(id))
+              .forEach((id) => { updates[`optionCounts.${id}`] = FieldValue.increment(1); });
+
+            if (Object.keys(updates).length > 0) {
+              tx.update(questionRef, updates);
+            }
+            tx.set(answerRef, { optionIds, createdAt: FieldValue.serverTimestamp() });
+          }
           return;
         }
 
         throw Object.assign(new Error('Unknown question type'), { code: 400 });
       });
-
-      if (statsPayload) {
-        enqueueQuestionStats(sessionId, questionId, statsPayload);
-      }
 
       res.status(201).json({ success: true });
     } catch (err: unknown) {
@@ -246,7 +194,8 @@ answerRouter.post(
       }
 
       const batch = db.batch();
-      const statsPayloads: { optionIds?: string[]; textValue?: string }[] = [];
+      const optionCounts: Record<string, number> = {};
+      const recentTexts: string[] = [];
 
       for (let index = 0; index < LOAD_TEST_ANSWER_COUNT; index += 1) {
         const answerRef = questionRef.collection('answers').doc(uuidv4());
@@ -257,7 +206,7 @@ answerRouter.post(
             createdAt: FieldValue.serverTimestamp(),
             loadTest: true,
           });
-          statsPayloads.push({ textValue });
+          recentTexts.push(textValue);
         } else if (type === 'SINGLE_CHOICE') {
           const option = options[index % options.length];
           batch.set(answerRef, {
@@ -265,7 +214,7 @@ answerRouter.post(
             createdAt: FieldValue.serverTimestamp(),
             loadTest: true,
           });
-          statsPayloads.push({ optionIds: [option.id] });
+          optionCounts[option.id] = (optionCounts[option.id] ?? 0) + 1;
         } else if (type === 'MULTI_CHOICE') {
           const shuffled = [...options].sort(() => Math.random() - 0.5);
           const selected = shuffled.slice(0, Math.min(options.length, 1 + (index % 3))).map((option) => option.id);
@@ -274,7 +223,9 @@ answerRouter.post(
             createdAt: FieldValue.serverTimestamp(),
             loadTest: true,
           });
-          statsPayloads.push({ optionIds: selected });
+          selected.forEach((optionId) => {
+            optionCounts[optionId] = (optionCounts[optionId] ?? 0) + 1;
+          });
         } else {
           res.status(400).json({ error: 'Unknown question type' });
           return;
@@ -282,7 +233,18 @@ answerRouter.post(
       }
 
       await batch.commit();
-      statsPayloads.forEach((payload) => enqueueQuestionStats(sessionId, questionId, payload));
+
+      const updates: Record<string, unknown> = {
+        totalResponses: FieldValue.increment(LOAD_TEST_ANSWER_COUNT),
+      };
+      Object.entries(optionCounts).forEach(([optionId, count]) => {
+        updates[`optionCounts.${optionId}`] = FieldValue.increment(count);
+      });
+      if (recentTexts.length > 0) {
+        const existingTexts = (questionData.recentTexts ?? []) as string[];
+        updates.recentTexts = [...existingTexts, ...recentTexts].slice(-MAX_RECENT_TEXTS);
+      }
+      await questionRef.update(updates);
 
       res.json({ success: true, inserted: LOAD_TEST_ANSWER_COUNT });
     } catch (err) {
@@ -324,7 +286,7 @@ answerRouter.post(
           }
 
           const existingTexts: string[] = questionData.recentTexts ?? [];
-          const nextTexts = [...existingTexts, ...textAnswers].slice(-200);
+          const nextTexts = [...existingTexts, ...textAnswers].slice(-MAX_RECENT_TEXTS);
 
           textAnswers.forEach((text) => {
             const answerRef = questionRef.collection('answers').doc(uuidv4());

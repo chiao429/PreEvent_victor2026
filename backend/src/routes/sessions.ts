@@ -79,6 +79,11 @@ async function seedDefaultQuestions(sessionId: string): Promise<void> {
       totalResponses: 0,
       recentTexts: [],
       displayScene: seed.displayScene,
+      wordCloudRefreshIntervalSec: 3,
+      wordCloudRefreshPaused: false,
+      wordCloudRefreshNonce: 0,
+      spotlightSloganText: 'We Are One',
+      spotlightSloganVisible: false,
       createdAt: FieldValue.serverTimestamp(),
     });
   });

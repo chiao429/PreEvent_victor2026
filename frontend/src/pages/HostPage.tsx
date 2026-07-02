@@ -26,22 +26,11 @@ const STATUS_COLOR: Record<string, string> = {
   CLOSED: 'bg-red-100 text-red-600',
 };
 
-const RANDOM_CHURCH_PREFIXES = ['台北', '新北', '桃園', '台中', '彰化', '嘉義', '台南', '高雄', '屏東', '宜蘭', '花蓮', '台東', '香港', '新加坡', '洛杉磯'];
-const RANDOM_CHURCH_SUFFIXES = ['和平教會', '真理堂', '福氣教會', '靈糧堂', '行道會', '信友堂', '生命堂', '基督之家', '豐收教會'];
-const RANDOM_TRAITS = ['愛笑', '熱情', '會唱歌', '很細心', '超專注', '樂於助人', '領袖力', '藝術魂', '體育咖', '愛禱告', '超有創意', '溫柔細膩', '超會講笑話', '行動派', '策略腦'];
+const MAX_TEXT_SEED_COUNT = 500;
+const TEXT_SEED_BATCH_SIZE = 50;
 
 function randomInt(min: number, max: number) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function buildRandomChurchName() {
-  const prefix = RANDOM_CHURCH_PREFIXES[Math.floor(Math.random() * RANDOM_CHURCH_PREFIXES.length)];
-  const suffix = RANDOM_CHURCH_SUFFIXES[Math.floor(Math.random() * RANDOM_CHURCH_SUFFIXES.length)];
-  return `${prefix}${suffix}`;
-}
-
-function buildRandomTraitWord() {
-  return RANDOM_TRAITS[Math.floor(Math.random() * RANDOM_TRAITS.length)];
 }
 
 function shuffleArray<T>(items: T[]): T[] {
@@ -51,10 +40,6 @@ function shuffleArray<T>(items: T[]): T[] {
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
   return shuffled;
-}
-
-function isChurchQuestion(title: string) {
-  return /教會|Church/i.test(title);
 }
 
 export function HostPage() {
@@ -71,7 +56,7 @@ export function HostPage() {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [showEditor, setShowEditor] = useState(false);
   const [seedTarget, setSeedTarget] = useState<Question | null>(null);
-  const [seedText, setSeedText] = useState('');
+  const [seedTextCount, setSeedTextCount] = useState(50);
   const [seedCounts, setSeedCounts] = useState<Record<string, number>>({});
   const [seedLoading, setSeedLoading] = useState(false);
   const [seedError, setSeedError] = useState<string | null>(null);
@@ -86,11 +71,16 @@ export function HostPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [clearingQuestionId, setClearingQuestionId] = useState<string | null>(null);
+  const [deletingQuestionId, setDeletingQuestionId] = useState<string | null>(null);
   const [resettingSession, setResettingSession] = useState(false);
   const [displayModeUpdatingQuestionId, setDisplayModeUpdatingQuestionId] = useState<string | null>(null);
   const [loadTestingQuestionId, setLoadTestingQuestionId] = useState<string | null>(null);
   const [reopeningQuestionId, setReopeningQuestionId] = useState<string | null>(null);
   const [startingQuestionId, setStartingQuestionId] = useState<string | null>(null);
+  const [wordCloudIntervalDrafts, setWordCloudIntervalDrafts] = useState<Record<string, string>>({});
+  const [wordCloudUpdatingQuestionId, setWordCloudUpdatingQuestionId] = useState<string | null>(null);
+  const [spotlightSloganDrafts, setSpotlightSloganDrafts] = useState<Record<string, string>>({});
+  const [spotlightSloganUpdatingQuestionId, setSpotlightSloganUpdatingQuestionId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!hostToken) {
@@ -198,16 +188,18 @@ export function HostPage() {
 
   async function handleDeleteQuestion(question: Question) {
     if (!sessionId || !hostToken) return;
-    if (question.totalResponses > 0) {
-      alert('已有作答的題目無法刪除');
-      return;
-    }
-    if (!window.confirm('確定要刪除這題嗎？')) return;
+    const message = question.totalResponses > 0
+      ? `確定要刪除「${question.title}」嗎？\n\n這會一併刪除 ${question.totalResponses} 筆作答資料，無法復原。`
+      : `確定要刪除「${question.title}」嗎？`;
+    if (!window.confirm(message)) return;
+    setDeletingQuestionId(question.questionId);
     try {
       await deleteQuestion(sessionId, hostToken, question.questionId);
       await fetchQuestions();
     } catch (err) {
       alert(err instanceof Error ? err.message : '刪除失敗');
+    } finally {
+      setDeletingQuestionId(null);
     }
   }
 
@@ -251,6 +243,81 @@ export function HostPage() {
     }
   }
 
+  function getWordCloudIntervalValue(question: Question) {
+    return wordCloudIntervalDrafts[question.questionId] ?? String(question.wordCloudRefreshIntervalSec ?? 3);
+  }
+
+  async function handleSaveWordCloudInterval(question: Question) {
+    if (!sessionId || !hostToken) return;
+    const rawValue = Number(getWordCloudIntervalValue(question));
+    const nextInterval = Math.max(1, Math.min(60, Number.isFinite(rawValue) ? Math.round(rawValue) : 3));
+    setWordCloudUpdatingQuestionId(question.questionId);
+    try {
+      await updateQuestion(sessionId, hostToken, question.questionId, {
+        wordCloudRefreshIntervalSec: nextInterval,
+      });
+      setWordCloudIntervalDrafts((prev) => ({ ...prev, [question.questionId]: String(nextInterval) }));
+      await fetchQuestions();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '更新 Word Cloud 秒數失敗');
+    } finally {
+      setWordCloudUpdatingQuestionId(null);
+    }
+  }
+
+  async function handleRefreshWordCloudNow(question: Question) {
+    if (!sessionId || !hostToken) return;
+    setWordCloudUpdatingQuestionId(question.questionId);
+    try {
+      await updateQuestion(sessionId, hostToken, question.questionId, {
+        wordCloudRefreshNonce: (question.wordCloudRefreshNonce ?? 0) + 1,
+      });
+      await fetchQuestions();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '立即重新整理失敗');
+    } finally {
+      setWordCloudUpdatingQuestionId(null);
+    }
+  }
+
+  async function handleToggleWordCloudRefresh(question: Question) {
+    if (!sessionId || !hostToken) return;
+    setWordCloudUpdatingQuestionId(question.questionId);
+    try {
+      await updateQuestion(sessionId, hostToken, question.questionId, {
+        wordCloudRefreshPaused: !(question.wordCloudRefreshPaused ?? false),
+      });
+      await fetchQuestions();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '切換自動重新整理失敗');
+    } finally {
+      setWordCloudUpdatingQuestionId(null);
+    }
+  }
+
+  function getSpotlightSloganValue(question: Question) {
+    return spotlightSloganDrafts[question.questionId] ?? question.spotlightSloganText ?? 'We Are One';
+  }
+
+  async function handleToggleSpotlightSlogan(question: Question) {
+    if (!sessionId || !hostToken) return;
+    const nextVisible = !(question.spotlightSloganVisible ?? false);
+    const nextText = getSpotlightSloganValue(question).trim() || 'We Are One';
+    setSpotlightSloganUpdatingQuestionId(question.questionId);
+    try {
+      await updateQuestion(sessionId, hostToken, question.questionId, {
+        spotlightSloganText: nextText,
+        spotlightSloganVisible: nextVisible,
+      });
+      setSpotlightSloganDrafts((prev) => ({ ...prev, [question.questionId]: nextText }));
+      await fetchQuestions();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '切換標語失敗');
+    } finally {
+      setSpotlightSloganUpdatingQuestionId(null);
+    }
+  }
+
   async function handleResetQuestion(question: Question) {
     if (!sessionId || !hostToken) return;
     if (!window.confirm(`確定要清除「${question.title}」的全部作答資料嗎？`)) return;
@@ -282,17 +349,19 @@ export function HostPage() {
   function buildSeedPayloads(): { payloads: { textAnswers?: string[]; optionCounts?: Record<string, number> }[]; error?: string } {
     if (!seedTarget) return { payloads: [] };
     if (seedTarget.type === 'TEXT') {
-      const textAnswers = seedText
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean);
-      if (textAnswers.length === 0) {
-        return { payloads: [], error: '請輸入至少一行文字' };
+      const count = Math.round(Number(seedTextCount) || 0);
+      if (count <= 0) {
+        return { payloads: [], error: '請輸入至少 1 筆資料' };
       }
-      if (textAnswers.length > 50) {
-        return { payloads: [], error: '一次最多 50 筆文字' };
+      if (count > MAX_TEXT_SEED_COUNT) {
+        return { payloads: [], error: `一次最多 ${MAX_TEXT_SEED_COUNT} 筆文字測試資料` };
       }
-      return { payloads: shuffleArray(textAnswers.map((text) => ({ textAnswers: [text] }))) };
+      const textAnswers = Array.from({ length: count }, (_, index) => `資料${index + 1}`);
+      const payloads: { textAnswers: string[] }[] = [];
+      for (let index = 0; index < textAnswers.length; index += TEXT_SEED_BATCH_SIZE) {
+        payloads.push({ textAnswers: textAnswers.slice(index, index + TEXT_SEED_BATCH_SIZE) });
+      }
+      return { payloads };
     }
 
     const payloads: { optionCounts: Record<string, number> }[] = [];
@@ -316,9 +385,7 @@ export function HostPage() {
     if (!seedTarget) return;
     const total = randomInt(20, 50);
     if (seedTarget.type === 'TEXT') {
-      const generator = isChurchQuestion(seedTarget.title) ? buildRandomChurchName : buildRandomTraitWord;
-      const lines = Array.from({ length: total }, generator);
-      setSeedText(lines.join('\n'));
+      setSeedTextCount(total);
       return;
     }
 
@@ -361,7 +428,7 @@ export function HostPage() {
         await wait(300);
       }
       setSeedTarget(null);
-      setSeedText('');
+      setSeedTextCount(50);
       setSeedCounts({});
       await fetchQuestions();
     } catch (err) {
@@ -587,9 +654,10 @@ export function HostPage() {
                       </button>
                       <button
                         onClick={() => handleDeleteQuestion(q)}
-                        className="px-3 py-1.5 bg-gray-100 hover:bg-red-600 hover:text-white text-gray-600 text-sm font-medium rounded-lg transition-colors"
+                        disabled={deletingQuestionId === q.questionId}
+                        className="px-3 py-1.5 bg-gray-100 hover:bg-red-600 hover:text-white text-gray-600 text-sm font-medium rounded-lg transition-colors disabled:opacity-40"
                       >
-                        刪除
+                        {deletingQuestionId === q.questionId ? '刪除中...' : '刪除'}
                       </button>
                     </>
                   )}
@@ -634,6 +702,15 @@ export function HostPage() {
                         {reopeningQuestionId === q.questionId ? '開啟中...' : '重新開啟'}
                       </button>
                     </>
+                  )}
+                  {q.status !== 'DRAFT' && (
+                    <button
+                      onClick={() => handleDeleteQuestion(q)}
+                      disabled={deletingQuestionId === q.questionId}
+                      className="px-3 py-1.5 bg-gray-100 hover:bg-red-600 hover:text-white text-gray-600 text-sm font-medium rounded-lg transition-colors disabled:opacity-40"
+                    >
+                      {deletingQuestionId === q.questionId ? '刪除中...' : '刪除'}
+                    </button>
                   )}
                   {q.type === 'TEXT' && (
                     <button
@@ -692,9 +769,95 @@ export function HostPage() {
               )}
 
               {q.type === 'TEXT' && (
-                <p className="text-xs text-gray-400 mt-1">
-                  文字題・{q.totalResponses} 人作答
-                </p>
+                <div className="mt-1 space-y-3">
+                  <p className="text-xs text-gray-400">
+                    文字題・{q.totalResponses} 人作答
+                  </p>
+                  {q.displayScene === 'word-cloud' && (
+                    <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label className="flex items-center gap-2 text-xs font-medium text-indigo-700">
+                          自動刷新秒數
+                          <input
+                            type="number"
+                            min={1}
+                            max={60}
+                            value={getWordCloudIntervalValue(q)}
+                            onChange={(e) => setWordCloudIntervalDrafts((prev) => ({
+                              ...prev,
+                              [q.questionId]: e.target.value,
+                            }))}
+                            className="w-16 rounded-lg border border-indigo-200 bg-white px-2 py-1 text-right text-gray-800 focus:border-indigo-500 focus:outline-none"
+                          />
+                          秒
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => handleSaveWordCloudInterval(q)}
+                          disabled={wordCloudUpdatingQuestionId === q.questionId}
+                          className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:bg-indigo-300"
+                        >
+                          套用
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRefreshWordCloudNow(q)}
+                          disabled={wordCloudUpdatingQuestionId === q.questionId}
+                          className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                        >
+                          立即重新整理
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleWordCloudRefresh(q)}
+                          disabled={wordCloudUpdatingQuestionId === q.questionId}
+                          className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
+                            q.wordCloudRefreshPaused
+                              ? 'border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                              : 'border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+                          }`}
+                        >
+                          {q.wordCloudRefreshPaused ? '恢復重新整理' : '停止重新整理'}
+                        </button>
+                        <span className="text-xs text-gray-400">
+                          {q.wordCloudRefreshPaused ? '目前已停止自動刷新' : `目前每 ${q.wordCloudRefreshIntervalSec ?? 3} 秒刷新`}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  {q.displayScene === 'spotlight' && (
+                    <div className="rounded-xl border border-gray-700/20 bg-gray-900/80 p-3 text-white">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label className="flex min-w-0 flex-1 items-center gap-2 text-xs font-medium text-gray-200">
+                          顯示標語
+                          <input
+                            type="text"
+                            value={getSpotlightSloganValue(q)}
+                            onChange={(e) => setSpotlightSloganDrafts((prev) => ({
+                              ...prev,
+                              [q.questionId]: e.target.value,
+                            }))}
+                            maxLength={80}
+                            className="min-w-[160px] flex-1 rounded-lg border border-white/15 bg-black/30 px-3 py-1.5 text-sm text-white placeholder:text-gray-500 focus:border-white/40 focus:outline-none"
+                            placeholder="We Are One"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleSpotlightSlogan(q)}
+                          disabled={spotlightSloganUpdatingQuestionId === q.questionId}
+                          className="rounded-lg border border-white/15 bg-black/35 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/10 disabled:opacity-50"
+                        >
+                          {spotlightSloganUpdatingQuestionId === q.questionId
+                            ? '更新中...'
+                            : q.spotlightSloganVisible
+                              ? '隱藏標語'
+                              : '顯示標語'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -806,11 +969,7 @@ export function HostPage() {
               <div>
                 <p className="text-xs uppercase tracking-widest text-gray-400">Display 測試工具</p>
                 <h4 className="text-xl font-semibold text-gray-900">
-                  {seedTarget.type === 'TEXT'
-                    ? isChurchQuestion(seedTarget.title)
-                      ? '灌入教會名稱'
-                      : '灌入文字答案'
-                    : '灌入測試票數'}
+                  {seedTarget.type === 'TEXT' ? '灌入測試資料' : '灌入測試票數'}
                 </h4>
                 <p className="text-sm text-gray-500 mt-1">題目：{seedTarget.title}</p>
               </div>
@@ -824,20 +983,25 @@ export function HostPage() {
             <form onSubmit={handleSeedSubmit} className="space-y-4">
               {seedTarget.type === 'TEXT' ? (
                 <>
-                  <textarea
-                    value={seedText}
-                    onChange={(e) => setSeedText(e.target.value)}
-                    rows={8}
-                    className="w-full border border-gray-200 rounded-xl p-3 focus:outline-none focus:border-indigo-500"
-                    placeholder={
-                      isChurchQuestion(seedTarget.title)
-                        ? '每行一個文字答案，例如:\n台北真理堂\n高雄福氣教會\n...'
-                        : '每行一個文字答案，例如:\n愛笑\n溫柔細膩\n超有創意\n...'
-                    }
-                  />
-                  <div className="flex items-center justify-between text-sm text-gray-500">
-                    <span>一次最多 50 筆，會即時顯示在 Display</span>
-                    <span>{seedText.split('\n').filter((l) => l.trim()).length} 筆</span>
+                  <label className="block">
+                    <span className="block text-sm font-medium text-gray-700 mb-1">測試資料筆數</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={MAX_TEXT_SEED_COUNT}
+                      value={seedTextCount}
+                      onChange={(e) => setSeedTextCount(Number(e.target.value))}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-right focus:outline-none focus:border-indigo-500"
+                    />
+                  </label>
+                  <div className="rounded-xl bg-gray-50 border border-gray-100 px-3 py-2 text-sm text-gray-500">
+                    會灌入 <span className="font-semibold text-gray-700">資料1</span>
+                    {seedTextCount > 1 && (
+                      <>
+                        {' '}到 <span className="font-semibold text-gray-700">資料{Math.max(1, Math.round(Number(seedTextCount) || 1))}</span>
+                      </>
+                    )}
+                    ，最多 {MAX_TEXT_SEED_COUNT} 筆。
                   </div>
                   <button
                     type="button"

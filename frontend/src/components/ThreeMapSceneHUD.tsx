@@ -89,7 +89,6 @@ interface HudSignal {
 
 interface ThreeMapSceneHUDProps {
   options: QuestionOption[];
-  sessionId?: string;
 }
 
 interface MapData {
@@ -137,13 +136,6 @@ function normalizeRegionName(raw: string): TriggerName | null {
   if (TAIWAN_REGION_NAMES.has(trimmed as TaiwanRegionName)) return trimmed as TaiwanRegionName;
   const first = trimmed[0];
   return TAIWAN_REGION_NAMES.has(first as TaiwanRegionName) ? first as TaiwanRegionName : null;
-}
-
-function buildWsUrl(sessionId: string) {
-  if (!sessionId) return '';
-  const { protocol, host } = window.location;
-  const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${wsProtocol}//${host}/api/ws/sessions/${sessionId}/map3d`;
 }
 
 function createGlowTexture(colorStops: [number, string][]) {
@@ -386,7 +378,7 @@ function makeConnectionGeometry(a: THREE.Vector3, b: THREE.Vector3, arcHeight: n
   return new THREE.BufferGeometry().setFromPoints(points);
 }
 
-export function ThreeMapSceneHUD({ options, sessionId = '' }: ThreeMapSceneHUDProps) {
+export function ThreeMapSceneHUD({ options }: ThreeMapSceneHUDProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapDataRef = useRef<MapData | null>(null);
   const taiwanVisualsRef = useRef<Record<TaiwanRegionName, PointVisual> | null>(null);
@@ -793,41 +785,6 @@ export function ThreeMapSceneHUD({ options, sessionId = '' }: ThreeMapSceneHUDPr
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
-
-  useEffect(() => {
-    if (!sessionId) return undefined;
-    let cancelled = false;
-    let reconnectId = 0;
-
-    const connect = () => {
-      if (cancelled) return;
-      const url = buildWsUrl(sessionId);
-      const ws = new WebSocket(url);
-
-      ws.addEventListener('message', (event) => {
-        try {
-          const payload = JSON.parse(event.data);
-          if (payload?.type !== 'region' || typeof payload.name !== 'string') return;
-          const region = normalizeRegionName(payload.name);
-          if (region) triggerRef.current(region);
-        } catch (err) {
-          console.warn('[ThreeMapSceneHUD] invalid websocket message', err);
-        }
-      });
-
-      ws.addEventListener('close', () => {
-        if (!cancelled) reconnectId = window.setTimeout(connect, 3000);
-      });
-      ws.addEventListener('error', () => ws.close());
-    };
-
-    connect();
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(reconnectId);
-    };
-  }, [sessionId]);
 
   useEffect(() => {
     options.forEach((option) => {

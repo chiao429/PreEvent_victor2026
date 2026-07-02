@@ -62,6 +62,11 @@ export function useLiveQuestion(sessionId: string): UseLiveQuestionResult {
           recentTexts: (data['recentTexts'] as string[]) ?? [],
           displayScene: sanitizedScene,
           displayMode: ((data['displayMode'] as 'question' | 'results') ?? 'question'),
+          wordCloudRefreshIntervalSec: (data['wordCloudRefreshIntervalSec'] as number | undefined) ?? 3,
+          wordCloudRefreshPaused: (data['wordCloudRefreshPaused'] as boolean | undefined) ?? false,
+          wordCloudRefreshNonce: (data['wordCloudRefreshNonce'] as number | undefined) ?? 0,
+          spotlightSloganText: (data['spotlightSloganText'] as string | undefined) ?? 'We Are One',
+          spotlightSloganVisible: (data['spotlightSloganVisible'] as boolean | undefined) ?? false,
         });
       },
       (err) => {

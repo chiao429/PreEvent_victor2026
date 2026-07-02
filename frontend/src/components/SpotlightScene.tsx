@@ -1,12 +1,13 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 
 interface SpotlightSceneProps {
-  sessionId: string;
   questionId?: string;
   fallbackTexts: string[];
+  sloganText?: string;
+  sloganVisible?: boolean;
 }
 
-interface TextInstance {
+interface TextTile {
   id: number;
   text: string;
   x: number;
@@ -14,273 +15,257 @@ interface TextInstance {
   size: number;
   alpha: number;
   targetAlpha: number;
-  vx: number;
-  vy: number;
-  removing: boolean;
+  revealAt: number;
+  fadeDuration: number;
+  warm: boolean;
+  weight: number;
+  driftAmpX: number;
+  driftAmpY: number;
+  driftPeriod: number;
+  driftPhase: number;
+  highlightUntil?: number;
+  highlightStartedAt?: number;
+  highlightWarm?: boolean;
 }
 
-const MAX_INSTANCES = 500;
-const MIN_SPAWN = 3;
-const MAX_SPAWN = 5;
-const RECONNECT_DELAY = 3000;
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+const FONT_FAMILY = "'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif";
 
 function randomRange(min: number, max: number) {
   return Math.random() * (max - min) + min;
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
+function shuffle<T>(items: T[]) {
+  const copy = [...items];
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const target = Math.floor(Math.random() * (index + 1));
+    [copy[index], copy[target]] = [copy[target], copy[index]];
+  }
+  return copy;
 }
 
-function buildWsUrl(sessionId: string) {
-  if (!sessionId) return '';
-  const { protocol, host } = window.location;
-  const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${wsProtocol}//${host}/api/ws/sessions/${sessionId}/spotlight`;
+function getFontRange(width: number, height: number) {
+  const vmin = Math.min(width, height);
+  return {
+    min: vmin * 0.024,
+    max: vmin * 0.052,
+    floor: vmin * 0.018,
+  };
 }
 
-export function SpotlightScene({ sessionId, questionId, fallbackTexts }: SpotlightSceneProps) {
+function buildTiles(ctx: CanvasRenderingContext2D, texts: string[], width: number, height: number, now: number) {
+  const cleanTexts = texts.map((text) => text.trim()).filter(Boolean);
+  if (cleanTexts.length === 0) return [];
+
+  const pool = shuffle(cleanTexts);
+  const fontRange = getFontRange(width, height);
+  const tiles: Omit<TextTile, 'revealAt' | 'fadeDuration'>[] = [];
+  const sidePadding = width * 0.032;
+  const topPadding = height * 0.065;
+  const bottomLimit = height * 0.955;
+  const rowGap = Math.min(width, height) * 0.014;
+  const textGap = width * 0.014;
+  const maxTextWidth = width * 0.24;
+  let y = topPadding;
+  let id = 0;
+
+  while (y < bottomLimit) {
+    const rowSize = randomRange(fontRange.min, fontRange.max);
+    const lineHeight = rowSize * 1.42;
+    let x = sidePadding + randomRange(0, width * 0.012);
+    const rowTexts = shuffle(pool);
+    let didPlace = false;
+
+    for (let rowIndex = 0; rowIndex < rowTexts.length; rowIndex += 1) {
+      const text = rowTexts[rowIndex];
+      const prominence = rowIndex % 9 === 0 ? randomRange(1.16, 1.36) : randomRange(0.86, 1.08);
+      const weight = prominence > 1.12 ? 800 : 700;
+      let size = rowSize * prominence;
+      ctx.font = `${weight} ${size}px ${FONT_FAMILY}`;
+      let measured = ctx.measureText(text).width;
+      if (measured > maxTextWidth) {
+        size = Math.max(fontRange.floor, size * (maxTextWidth / measured));
+        ctx.font = `${weight} ${size}px ${FONT_FAMILY}`;
+        measured = ctx.measureText(text).width;
+      }
+      if (x + measured > width - sidePadding) break;
+
+      const centerX = x + measured / 2;
+      const centerY = y - size * 0.4;
+      const dx = (centerX - width / 2) / (width / 2);
+      const dy = (centerY - height / 2) / (height / 2);
+      const distance = Math.min(1, Math.sqrt(dx * dx + dy * dy));
+      const centerGlow = 1 - distance;
+      const targetAlpha = 0.32 + centerGlow * 0.58 + randomRange(-0.06, 0.06);
+
+      tiles.push({
+        id: id += 1,
+        text,
+        x,
+        y,
+        size,
+        alpha: 0,
+        targetAlpha: Math.max(0.3, Math.min(0.95, targetAlpha)),
+        warm: centerGlow > 0.42 && Math.random() < 0.42,
+        weight,
+        driftAmpX: randomRange(width * 0.003, width * 0.008) * (Math.random() < 0.5 ? -1 : 1),
+        driftAmpY: randomRange(height * 0.003, height * 0.008) * (Math.random() < 0.5 ? -1 : 1),
+        driftPeriod: randomRange(6000, 12000),
+        driftPhase: randomRange(0, Math.PI * 2),
+      });
+
+      x += measured + textGap;
+      didPlace = true;
+    }
+
+    if (!didPlace) break;
+    y += lineHeight + rowGap;
+  }
+
+  const revealOrder = shuffle([...tiles.keys()]);
+  const batchStarts = new Map<number, number>();
+  let cursor = 0;
+  let batchStart = now + 180;
+  while (cursor < revealOrder.length) {
+    const batchSize = Math.floor(randomRange(5, 9));
+    for (let index = 0; index < batchSize && cursor < revealOrder.length; index += 1) {
+      batchStarts.set(revealOrder[cursor], batchStart);
+      cursor += 1;
+    }
+    batchStart += randomRange(240, 430);
+  }
+
+  return tiles.map((tile, index) => ({
+    ...tile,
+    revealAt: batchStarts.get(index) ?? now,
+    fadeDuration: 190,
+  }));
+}
+
+export function SpotlightScene({
+  questionId,
+  fallbackTexts,
+  sloganText = 'We Are One',
+  sloganVisible = false,
+}: SpotlightSceneProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
-  const instancesRef = useRef<TextInstance[]>([]);
-  const nextIdRef = useRef(0);
-  const gradientCacheRef = useRef<{ width: number; height: number; gradient: CanvasGradient } | null>(null);
-  const widthRef = useRef<number>(window.innerWidth);
-  const heightRef = useRef<number>(window.innerHeight);
+  const tilesRef = useRef<TextTile[]>([]);
+  const sizeRef = useRef({ width: 0, height: 0, dpr: 1 });
   const animationFrameRef = useRef<number>();
-  const lastTimestampRef = useRef<number>(0);
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectRef = useRef<number>();
-  const fallbackSeenRef = useRef<Set<string>>(new Set());
-  const spawnCursorRef = useRef(0);
+  const builtSignatureRef = useRef('');
+  const nextHighlightAtRef = useRef(0);
 
-  const resizeCanvas = useCallback(() => {
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const width = window.innerWidth;
-    const height = window.innerHeight;
-    const dpr = window.devicePixelRatio || 1;
-    widthRef.current = width;
-    heightRef.current = height;
-    canvas.width = width * dpr;
-    canvas.height = height * dpr;
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
+
+    const rebuild = () => {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.floor(width * dpr);
+      canvas.height = Math.floor(height * dpr);
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      const ctx = canvas.getContext('2d');
+      ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+      sizeRef.current = { width, height, dpr };
+      if (ctx && builtSignatureRef.current) {
+        tilesRef.current = buildTiles(ctx, fallbackTexts, width, height, performance.now());
+      }
+    };
+
+    rebuild();
+    window.addEventListener('resize', rebuild);
+    return () => window.removeEventListener('resize', rebuild);
+  }, []);
+
+  useEffect(() => {
+    const signature = `${questionId ?? ''}:${fallbackTexts.length}:${fallbackTexts.join('\u0001')}`;
+    if (signature === builtSignatureRef.current) return;
+    builtSignatureRef.current = signature;
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    const { width, height } = sizeRef.current;
+    if (!ctx || width === 0 || height === 0) return;
+    tilesRef.current = buildTiles(ctx, fallbackTexts, width, height, performance.now());
+  }, [fallbackTexts, questionId]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!ctx) return;
+
+    const render = (now: number) => {
+      const { width, height, dpr } = sizeRef.current;
+      const visibleTiles = tilesRef.current.filter((tile) => now >= tile.revealAt + tile.fadeDuration);
+      const activeHighlightCount = visibleTiles.filter((tile) => (tile.highlightUntil ?? 0) > now).length;
+      if (visibleTiles.length > 0 && now >= nextHighlightAtRef.current && activeHighlightCount < 3) {
+        const selected: TextTile[] = [];
+        const shuffledTiles = shuffle(visibleTiles.filter((tile) => (tile.highlightUntil ?? 0) <= now));
+        const desiredCount = Math.min(2, 3 - activeHighlightCount, Math.random() < 0.55 ? 1 : 2);
+        shuffledTiles.some((tile) => {
+          const tooClose = selected.some((picked) => (
+            Math.abs(picked.x - tile.x) < width * 0.24 && Math.abs(picked.y - tile.y) < height * 0.18
+          ));
+          if (!tooClose) selected.push(tile);
+          return selected.length >= desiredCount;
+        });
+        selected.forEach((tile) => {
+          tile.highlightStartedAt = now;
+          tile.highlightUntil = now + 1500;
+          tile.highlightWarm = Math.random() < 0.55;
+        });
+        nextHighlightAtRef.current = now + randomRange(800, 1500);
+      }
+
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctxRef.current = ctx;
-    }
-    gradientCacheRef.current = null;
-  }, []);
-
-  const ensureCapacity = useCallback(() => {
-    const activeCount = instancesRef.current.filter((instance) => !instance.removing).length;
-    if (activeCount <= MAX_INSTANCES) return;
-    const overflow = activeCount - MAX_INSTANCES;
-    const sorted = [...instancesRef.current].sort((a, b) => a.id - b.id);
-    let removed = 0;
-    for (const instance of sorted) {
-      if (instance.removing) continue;
-      instance.targetAlpha = 0;
-      instance.removing = true;
-      removed += 1;
-      if (removed >= overflow) break;
-    }
-  }, []);
-
-  const pickSpawnPosition = useCallback((width: number, height: number) => {
-    const cursor = spawnCursorRef.current;
-    spawnCursorRef.current += 1;
-
-    const angle = cursor * GOLDEN_ANGLE + randomRange(-0.28, 0.28);
-    const sequence = (cursor * 0.61803398875) % 1;
-    const centerPass = cursor % 4 === 0;
-    const radius = centerPass ? randomRange(0.05, 0.38) : Math.sqrt(sequence);
-    const xRadius = width * 0.46;
-    const yRadius = height * 0.42;
-    const jitterX = randomRange(-width * 0.035, width * 0.035);
-    const jitterY = randomRange(-height * 0.035, height * 0.035);
-
-    return {
-      x: clamp(width / 2 + Math.cos(angle) * radius * xRadius + jitterX, width * 0.06, width * 0.94),
-      y: clamp(height / 2 + Math.sin(angle) * radius * yRadius + jitterY, height * 0.08, height * 0.92),
-    };
-  }, []);
-
-  const spawnInstances = useCallback((name: string, options?: { instant?: boolean }) => {
-    if (!name.trim()) return;
-    const count = Math.floor(randomRange(MIN_SPAWN, MAX_SPAWN + 1));
-    const width = widthRef.current;
-    const height = heightRef.current;
-    for (let i = 0; i < count; i += 1) {
-      const targetAlpha = randomRange(0.3, 0.9);
-      const position = pickSpawnPosition(width, height);
-      instancesRef.current.push({
-        id: nextIdRef.current += 1,
-        text: name,
-        x: position.x,
-        y: position.y,
-        size: randomRange(18, 36),
-        alpha: options?.instant ? targetAlpha : 0,
-        targetAlpha,
-        vx: randomRange(-10, 10) * 0.02, // px per second
-        vy: randomRange(-10, 10) * 0.02,
-        removing: false,
-      });
-    }
-    ensureCapacity();
-  }, [ensureCapacity, pickSpawnPosition]);
-
-  const spawnMany = useCallback((names: string[], options?: { instant?: boolean }) => {
-    names.forEach((raw) => spawnInstances(raw, options));
-  }, [spawnInstances]);
-
-  useEffect(() => {
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-    return () => window.removeEventListener('resize', resizeCanvas);
-  }, [resizeCanvas]);
-
-  useEffect(() => {
-    instancesRef.current = [];
-    fallbackSeenRef.current.clear();
-    spawnCursorRef.current = 0;
-    gradientCacheRef.current = null;
-  }, [questionId]);
-
-  useEffect(() => {
-    if (!fallbackTexts.length) {
-      fallbackSeenRef.current.clear();
-      instancesRef.current.forEach((instance) => {
-        instance.targetAlpha = 0;
-        instance.removing = true;
-      });
-      return;
-    }
-
-    fallbackTexts.forEach((text) => {
-      const trimmed = text.trim();
-      if (!trimmed) return;
-      const key = trimmed.toLowerCase();
-      if (fallbackSeenRef.current.has(key)) return;
-      fallbackSeenRef.current.add(key);
-      spawnInstances(trimmed, { instant: true });
-    });
-  }, [fallbackTexts, spawnInstances]);
-
-  useEffect(() => {
-    if (!sessionId) return undefined;
-    let cancelled = false;
-
-    const connect = () => {
-      if (cancelled) return;
-      const url = buildWsUrl(sessionId);
-      if (!url) return;
-      const ws = new WebSocket(url);
-      wsRef.current = ws;
-
-      ws.addEventListener('message', (event) => {
-        try {
-          const payload = JSON.parse(event.data);
-          if (payload?.type === 'history' && Array.isArray(payload.names)) {
-            spawnMany(payload.names, { instant: true });
-          } else if (payload?.type === 'name' && typeof payload.name === 'string') {
-            spawnInstances(payload.name);
-          } else if (Array.isArray(payload)) {
-            spawnMany(payload, { instant: true });
-          }
-        } catch (err) {
-          console.warn('[SpotlightScene] invalid message', err);
-        }
-      });
-
-      const scheduleReconnect = () => {
-        if (cancelled) return;
-        reconnectRef.current = window.setTimeout(connect, RECONNECT_DELAY);
-      };
-
-      ws.addEventListener('close', scheduleReconnect);
-      ws.addEventListener('error', () => {
-        ws.close();
-      });
-    };
-
-    connect();
-
-    return () => {
-      cancelled = true;
-      if (reconnectRef.current) {
-        window.clearTimeout(reconnectRef.current);
-      }
-      wsRef.current?.close();
-    };
-  }, [sessionId, spawnInstances, spawnMany]);
-
-  useEffect(() => {
-    const render = (timestamp: number) => {
-      const ctx = ctxRef.current;
-      const canvas = canvasRef.current;
-      if (!ctx || !canvas) {
-        animationFrameRef.current = requestAnimationFrame(render);
-        return;
-      }
-      const width = widthRef.current;
-      const height = heightRef.current;
-      const delta = lastTimestampRef.current ? (timestamp - lastTimestampRef.current) / 1000 : 0;
-      lastTimestampRef.current = timestamp;
-
       ctx.clearRect(0, 0, width, height);
-      ctx.fillStyle = '#050505';
+      ctx.fillStyle = '#030405';
       ctx.fillRect(0, 0, width, height);
 
-      const gradientCache = gradientCacheRef.current;
-      let gradient = gradientCache?.gradient;
-      if (!gradient || gradientCache?.width !== width || gradientCache?.height !== height) {
-        gradient = ctx.createRadialGradient(
-          width / 2,
-          height / 2,
-          Math.max(width, height) * 0.08,
-          width / 2,
-          height / 2,
-          Math.max(width, height) * 0.7,
-        );
-        gradient.addColorStop(0, 'rgba(255, 225, 180, 0.25)');
-        gradient.addColorStop(0.35, 'rgba(255, 210, 160, 0.08)');
-        gradient.addColorStop(1, 'rgba(10, 10, 10, 0)');
-        gradientCacheRef.current = { width, height, gradient };
-      }
+      const glowWave = 0.5 + Math.sin(now / 540) * 0.5;
+      const glowIntensity = (0.7 + glowWave * 0.3) * (sloganVisible ? 1.2 : 1);
+      const glowRadiusScale = 0.95 + glowWave * 0.1;
+      const gradient = ctx.createRadialGradient(
+        width / 2,
+        height / 2,
+        Math.min(width, height) * 0.035 * glowRadiusScale,
+        width / 2,
+        height / 2,
+        Math.max(width, height) * 0.52 * glowRadiusScale,
+      );
+      gradient.addColorStop(0, `rgba(255, 255, 255, ${0.36 * glowIntensity})`);
+      gradient.addColorStop(0.1, `rgba(245, 219, 168, ${0.23 * glowIntensity})`);
+      gradient.addColorStop(0.34, `rgba(145, 155, 155, ${0.08 * glowIntensity})`);
+      gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, width, height);
 
-      const instances = instancesRef.current;
-      for (let i = instances.length - 1; i >= 0; i -= 1) {
-        const instance = instances[i];
-        const speedFactor = delta || 0.016;
-        instance.x += instance.vx * speedFactor * 60;
-        instance.y += instance.vy * speedFactor * 60;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      tilesRef.current.forEach((tile) => {
+        const progress = Math.max(0, Math.min(1, (now - tile.revealAt) / tile.fadeDuration));
+        tile.alpha = tile.targetAlpha * progress;
+        if (tile.alpha <= 0) return;
+        const highlightProgress = tile.highlightStartedAt && tile.highlightUntil && now < tile.highlightUntil
+          ? Math.sin(Math.min(1, (now - tile.highlightStartedAt) / 1500) * Math.PI)
+          : 0;
+        const driftX = Math.sin((now / tile.driftPeriod) * Math.PI * 2 + tile.driftPhase) * tile.driftAmpX;
+        const driftY = Math.cos((now / (tile.driftPeriod * 1.17)) * Math.PI * 2 + tile.driftPhase) * tile.driftAmpY;
+        const scale = 1 + highlightProgress * 0.05;
+        ctx.globalAlpha = Math.min(1, tile.alpha + highlightProgress * 0.22) * (sloganVisible ? 0.25 : 1);
+        ctx.font = `${tile.weight} ${tile.size}px ${FONT_FAMILY}`;
+        ctx.fillStyle = highlightProgress > 0
+          ? (tile.highlightWarm ? '#FFD700' : '#FFFFFF')
+          : tile.warm ? '#D9C18A' : '#E8EEF2';
+        ctx.save();
+        ctx.translate(tile.x + driftX, tile.y + driftY);
+        ctx.scale(scale, scale);
+        ctx.fillText(tile.text, 0, 0);
+        ctx.restore();
+      });
 
-        if (instance.x < -100) instance.x = width + 50;
-        if (instance.x > width + 100) instance.x = -50;
-        if (instance.y < -100) instance.y = height + 50;
-        if (instance.y > height + 100) instance.y = -50;
-
-        instance.alpha += (instance.targetAlpha - instance.alpha) * 0.05;
-        if (instance.removing && instance.alpha <= 0.02) {
-          instances.splice(i, 1);
-          continue;
-        }
-
-        ctx.globalAlpha = Math.max(0, Math.min(1, instance.alpha));
-        ctx.fillStyle = '#ffffff';
-        ctx.font = `${instance.size}px 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(instance.text, instance.x, instance.y);
-      }
       ctx.globalAlpha = 1;
-
       animationFrameRef.current = requestAnimationFrame(render);
     };
 
@@ -290,7 +275,61 @@ export function SpotlightScene({ sessionId, questionId, fallbackTexts }: Spotlig
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, []);
+  }, [sloganVisible]);
 
-  return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />;
+  return (
+    <div className="absolute inset-0">
+      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
+      {sloganVisible && (
+        <div className="spotlight-slogan pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center">
+          <div className="spotlight-slogan-glow" />
+          <div className="spotlight-slogan-text">
+            {sloganText.trim() || 'We Are One'}
+          </div>
+        </div>
+      )}
+      <style>{`
+        .spotlight-slogan {
+          animation: spotlightSloganIn 1.5s ease-out both;
+        }
+        .spotlight-slogan-text {
+          position: relative;
+          z-index: 2;
+          font-size: clamp(88px, 13vw, 260px);
+          line-height: 1;
+          font-weight: 900;
+          letter-spacing: 0;
+          color: #ffffff;
+          text-align: center;
+          text-shadow: 0 0 40px rgba(255,255,255,0.9), 0 0 80px rgba(255,255,255,0.5);
+          animation: spotlightSloganBreathe 4s ease-in-out 1.5s infinite;
+        }
+        .spotlight-slogan-glow {
+          position: absolute;
+          z-index: 1;
+          width: 60vw;
+          height: 30vh;
+          max-width: 980px;
+          max-height: 320px;
+          border-radius: 999px;
+          background: radial-gradient(ellipse at center, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.28) 24%, rgba(255,255,255,0) 72%);
+          opacity: 0.15;
+          filter: blur(2px);
+          animation: spotlightSloganGlowBreathe 4s ease-in-out infinite;
+        }
+        @keyframes spotlightSloganIn {
+          from { opacity: 0; transform: scale(0.8); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        @keyframes spotlightSloganBreathe {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.03); }
+        }
+        @keyframes spotlightSloganGlowBreathe {
+          0%, 100% { transform: scale(0.98); opacity: 0.13; }
+          50% { transform: scale(1.04); opacity: 0.17; }
+        }
+      `}</style>
+    </div>
+  );
 }

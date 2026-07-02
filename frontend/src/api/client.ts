@@ -93,6 +93,11 @@ export function updateQuestion(
     displayScene?: string;
     optionLabels?: Record<string, string>;
     optionCounts?: Record<string, number>;
+    wordCloudRefreshIntervalSec?: number;
+    wordCloudRefreshPaused?: boolean;
+    wordCloudRefreshNonce?: number;
+    spotlightSloganText?: string;
+    spotlightSloganVisible?: boolean;
   },
 ): Promise<{ questionId: string; updated: boolean }> {
   return request(`/api/sessions/${sessionId}/questions/${questionId}`, {

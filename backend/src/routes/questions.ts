@@ -71,6 +71,11 @@ questionRouter.get('/:id/questions', requireHostToken, async (req: Request, res:
         totalResponses: data.totalResponses,
         displayScene,
         displayMode: (data.displayMode as 'question' | 'results' | undefined) ?? 'question',
+        wordCloudRefreshIntervalSec: (data.wordCloudRefreshIntervalSec as number | undefined) ?? 3,
+        wordCloudRefreshPaused: (data.wordCloudRefreshPaused as boolean | undefined) ?? false,
+        wordCloudRefreshNonce: (data.wordCloudRefreshNonce as number | undefined) ?? 0,
+        spotlightSloganText: (data.spotlightSloganText as string | undefined) ?? 'We Are One',
+        spotlightSloganVisible: (data.spotlightSloganVisible as boolean | undefined) ?? false,
       };
     });
 
@@ -111,6 +116,11 @@ questionRouter.get('/:id/questions/current', async (req: Request, res: Response)
       totalResponses: data.totalResponses,
       displayScene,
       displayMode: (data.displayMode as 'question' | 'results' | undefined) ?? 'question',
+      wordCloudRefreshIntervalSec: (data.wordCloudRefreshIntervalSec as number | undefined) ?? 3,
+      wordCloudRefreshPaused: (data.wordCloudRefreshPaused as boolean | undefined) ?? false,
+      wordCloudRefreshNonce: (data.wordCloudRefreshNonce as number | undefined) ?? 0,
+      spotlightSloganText: (data.spotlightSloganText as string | undefined) ?? 'We Are One',
+      spotlightSloganVisible: (data.spotlightSloganVisible as boolean | undefined) ?? false,
     });
   } catch (err) {
     console.error('[questions] current error:', err);
@@ -142,6 +152,11 @@ questionRouter.get('/:id/questions/:qid/results', requireHostToken, async (req: 
       totalResponses: data.totalResponses,
       displayScene,
       displayMode: (data.displayMode as 'question' | 'results' | undefined) ?? 'question',
+      wordCloudRefreshIntervalSec: (data.wordCloudRefreshIntervalSec as number | undefined) ?? 3,
+      wordCloudRefreshPaused: (data.wordCloudRefreshPaused as boolean | undefined) ?? false,
+      wordCloudRefreshNonce: (data.wordCloudRefreshNonce as number | undefined) ?? 0,
+      spotlightSloganText: (data.spotlightSloganText as string | undefined) ?? 'We Are One',
+      spotlightSloganVisible: (data.spotlightSloganVisible as boolean | undefined) ?? false,
     });
   } catch (err) {
     console.error('[questions] results error:', err);
@@ -199,6 +214,11 @@ questionRouter.post('/:id/questions', requireHostToken, async (req: Request, res
       totalResponses: 0,
       createdAt: FieldValue.serverTimestamp(),
       displayScene: desiredScene,
+      wordCloudRefreshIntervalSec: 3,
+      wordCloudRefreshPaused: false,
+      wordCloudRefreshNonce: 0,
+      spotlightSloganText: 'We Are One',
+      spotlightSloganVisible: false,
     });
 
     res.status(201).json({
@@ -210,6 +230,11 @@ questionRouter.post('/:id/questions', requireHostToken, async (req: Request, res
       options: options.map((opt) => ({ ...opt, count: 0 })),
       totalResponses: 0,
       displayScene: desiredScene,
+      wordCloudRefreshIntervalSec: 3,
+      wordCloudRefreshPaused: false,
+      wordCloudRefreshNonce: 0,
+      spotlightSloganText: 'We Are One',
+      spotlightSloganVisible: false,
     });
   } catch (err) {
     console.error('[questions] create error:', err);
@@ -222,6 +247,11 @@ const updateQuestionBodySchema = z.object({
   displayScene: z.enum(DISPLAY_SCENE_VALUES).optional(),
   optionLabels: z.record(z.string().min(1).max(200)).optional(),
   optionCounts: z.record(z.number().int().min(0)).optional(),
+  wordCloudRefreshIntervalSec: z.number().int().min(1).max(60).optional(),
+  wordCloudRefreshPaused: z.boolean().optional(),
+  wordCloudRefreshNonce: z.number().int().min(0).optional(),
+  spotlightSloganText: z.string().trim().min(1).max(80).optional(),
+  spotlightSloganVisible: z.boolean().optional(),
 });
 
 // PUT /api/sessions/:id/questions/:qid — 主持人編輯已關閉題目的內容
@@ -244,12 +274,32 @@ questionRouter.put('/:id/questions/:qid', requireHostToken, async (req: Request,
     }
 
     const data = docSnap.data()!;
-    if (data.status === 'OPEN') {
+    const {
+      title,
+      displayScene,
+      optionLabels,
+      optionCounts,
+      wordCloudRefreshIntervalSec,
+      wordCloudRefreshPaused,
+      wordCloudRefreshNonce,
+      spotlightSloganText,
+      spotlightSloganVisible,
+    } = parsed.data;
+    const hasContentUpdates = title !== undefined
+      || displayScene !== undefined
+      || optionLabels !== undefined
+      || optionCounts !== undefined;
+    const hasWordCloudUpdates = wordCloudRefreshIntervalSec !== undefined
+      || wordCloudRefreshPaused !== undefined
+      || wordCloudRefreshNonce !== undefined;
+    const hasSpotlightSloganUpdates = spotlightSloganText !== undefined
+      || spotlightSloganVisible !== undefined;
+
+    if (data.status === 'OPEN' && hasContentUpdates) {
       res.status(409).json({ error: 'Cannot edit a question while it is OPEN' });
       return;
     }
 
-    const { title, displayScene, optionLabels, optionCounts } = parsed.data;
     const updates: Record<string, unknown> = {};
 
     if (title !== undefined) updates.title = title;
@@ -276,6 +326,35 @@ questionRouter.put('/:id/questions/:qid', requireHostToken, async (req: Request,
       updates.totalResponses = Object.values(merged).reduce((s, c) => s + c, 0);
     }
 
+    if (hasWordCloudUpdates) {
+      if (data.type !== 'TEXT' || normalizeScene(data.type as QuestionType, data.displayScene as string | undefined) !== 'word-cloud') {
+        res.status(400).json({ error: 'Word Cloud refresh controls are only available for Word Cloud text questions' });
+        return;
+      }
+      if (wordCloudRefreshIntervalSec !== undefined) {
+        updates.wordCloudRefreshIntervalSec = wordCloudRefreshIntervalSec;
+      }
+      if (wordCloudRefreshPaused !== undefined) {
+        updates.wordCloudRefreshPaused = wordCloudRefreshPaused;
+      }
+      if (wordCloudRefreshNonce !== undefined) {
+        updates.wordCloudRefreshNonce = wordCloudRefreshNonce;
+      }
+    }
+
+    if (hasSpotlightSloganUpdates) {
+      if (data.type !== 'TEXT' || normalizeScene(data.type as QuestionType, data.displayScene as string | undefined) !== 'spotlight') {
+        res.status(400).json({ error: 'Spotlight slogan controls are only available for Spotlight text questions' });
+        return;
+      }
+      if (spotlightSloganText !== undefined) {
+        updates.spotlightSloganText = spotlightSloganText;
+      }
+      if (spotlightSloganVisible !== undefined) {
+        updates.spotlightSloganVisible = spotlightSloganVisible;
+      }
+    }
+
     await questionRef.update(updates);
     res.json({ questionId: req.params.qid, updated: true });
   } catch (err) {
@@ -284,7 +363,7 @@ questionRouter.put('/:id/questions/:qid', requireHostToken, async (req: Request,
   }
 });
 
-// DELETE /api/sessions/:id/questions/:qid — 主持人刪除尚未作答的題目
+// DELETE /api/sessions/:id/questions/:qid — 主持人刪除題目與其作答資料
 questionRouter.delete('/:id/questions/:qid', requireHostToken, async (req: Request, res: Response): Promise<void> => {
   try {
     const questionRef = db
@@ -297,14 +376,23 @@ questionRouter.delete('/:id/questions/:qid', requireHostToken, async (req: Reque
       return;
     }
 
-    const data = docSnap.data()!;
-    if ((data.totalResponses as number) > 0) {
-      res.status(409).json({ error: 'Cannot delete a question that already has responses' });
-      return;
+    const answersSnap = await questionRef.collection('answers').get();
+    let batch = db.batch();
+    let pendingWrites = 0;
+
+    for (const answerDoc of answersSnap.docs) {
+      batch.delete(answerDoc.ref);
+      pendingWrites += 1;
+      if (pendingWrites >= 450) {
+        await batch.commit();
+        batch = db.batch();
+        pendingWrites = 0;
+      }
     }
 
-    await questionRef.delete();
-    res.json({ success: true, questionId: req.params.qid });
+    batch.delete(questionRef);
+    await batch.commit();
+    res.json({ success: true, questionId: req.params.qid, deletedAnswers: answersSnap.size });
   } catch (err) {
     console.error('[questions] delete error:', err);
     res.status(500).json({ error: 'Internal server error' });

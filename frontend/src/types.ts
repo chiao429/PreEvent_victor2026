@@ -19,6 +19,11 @@ export interface Question {
   totalResponses: number;
   displayScene?: DisplayScene;
   displayMode?: 'question' | 'results';
+  wordCloudRefreshIntervalSec?: number;
+  wordCloudRefreshPaused?: boolean;
+  wordCloudRefreshNonce?: number;
+  spotlightSloganText?: string;
+  spotlightSloganVisible?: boolean;
 }
 
 export interface Session {
@@ -36,4 +41,9 @@ export interface LiveQuestion {
   recentTexts: string[];
   displayScene?: DisplayScene;
   displayMode: 'question' | 'results';
+  wordCloudRefreshIntervalSec?: number;
+  wordCloudRefreshPaused?: boolean;
+  wordCloudRefreshNonce?: number;
+  spotlightSloganText?: string;
+  spotlightSloganVisible?: boolean;
 }
