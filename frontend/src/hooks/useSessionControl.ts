@@ -4,8 +4,16 @@ import { db } from '../firebaseClient';
 
 export type DisplayMode = 'question' | 'results';
 
-export function useSessionControl(sessionId: string): { displayMode: DisplayMode } {
+export function useSessionControl(sessionId: string): {
+  displayMode: DisplayMode;
+  resultsQrEnabled: boolean;
+  resultsQrRefreshEnabled: boolean;
+  resultsQrRefreshIntervalSec: number;
+} {
   const [displayMode, setDisplayMode] = useState<DisplayMode>('results');
+  const [resultsQrEnabled, setResultsQrEnabled] = useState(true);
+  const [resultsQrRefreshEnabled, setResultsQrRefreshEnabled] = useState(true);
+  const [resultsQrRefreshIntervalSec, setResultsQrRefreshIntervalSec] = useState(5);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -14,7 +22,11 @@ export function useSessionControl(sessionId: string): { displayMode: DisplayMode
       doc(db, 'sessions', sessionId, '_ctrl', 'display'),
       (snap) => {
         if (snap.exists()) {
-          setDisplayMode(((snap.data()?.displayMode as DisplayMode) ?? 'results'));
+          const data = snap.data();
+          setDisplayMode(((data?.displayMode as DisplayMode) ?? 'results'));
+          setResultsQrEnabled((data?.resultsQrEnabled as boolean | undefined) ?? true);
+          setResultsQrRefreshEnabled((data?.resultsQrRefreshEnabled as boolean | undefined) ?? true);
+          setResultsQrRefreshIntervalSec((data?.resultsQrRefreshIntervalSec as number | undefined) ?? 5);
         }
       },
       (err) => {
@@ -25,5 +37,10 @@ export function useSessionControl(sessionId: string): { displayMode: DisplayMode
     return () => unsubscribe();
   }, [sessionId]);
 
-  return { displayMode };
+  return {
+    displayMode,
+    resultsQrEnabled,
+    resultsQrRefreshEnabled,
+    resultsQrRefreshIntervalSec,
+  };
 }

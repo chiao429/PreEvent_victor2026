@@ -169,6 +169,43 @@ export function setDisplayMode(
   });
 }
 
+export function setProjectionResultsQrEnabled(
+  sessionId: string,
+  hostToken: string,
+  resultsQrEnabled: boolean,
+): Promise<{ sessionId: string; resultsQrEnabled: boolean }> {
+  return request(`/api/sessions/${sessionId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${hostToken}`,
+    },
+    body: JSON.stringify({ resultsQrEnabled }),
+  });
+}
+
+export function setProjectionResultsQrRefreshSettings(
+  sessionId: string,
+  hostToken: string,
+  payload: {
+    resultsQrRefreshEnabled?: boolean;
+    resultsQrRefreshIntervalSec?: number;
+  },
+): Promise<{
+  sessionId: string;
+  resultsQrRefreshEnabled?: boolean;
+  resultsQrRefreshIntervalSec?: number;
+}> {
+  return request(`/api/sessions/${sessionId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${hostToken}`,
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getCurrentQuestion(sessionId: string): Promise<Question> {
   return request(`/api/sessions/${sessionId}/questions/current`);
 }

@@ -7,12 +7,20 @@ import { ThreeMapScene } from '../components/ThreeMapScene';
 import { ThreeMapSceneHUD } from '../components/ThreeMapSceneHUD';
 import { SpotlightScene } from '../components/SpotlightScene';
 import { MagicWordCloudScene } from '../components/MagicWordCloudScene';
+import { useSessionControl } from '../hooks/useSessionControl';
 
 export function DisplayPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [searchParams] = useSearchParams();
   const { question, loading, error, connected } = useLiveQuestion(sessionId ?? '');
+  const {
+    resultsQrEnabled,
+    resultsQrRefreshEnabled,
+    resultsQrRefreshIntervalSec,
+  } = useSessionControl(sessionId ?? '');
   const [projectorMode, setProjectorMode] = useState(searchParams.get('mode') === 'projector');
+  const [resultsQrVisible, setResultsQrVisible] = useState(true);
+  const [resultsQrRefreshNonce, setResultsQrRefreshNonce] = useState(0);
   const [revealedCounts, setRevealedCounts] = useState<Record<string, number>>({});
   const [revealedTotalResponses, setRevealedTotalResponses] = useState(0);
   const [revealedTextCount, setRevealedTextCount] = useState(0);
@@ -88,11 +96,35 @@ export function DisplayPage() {
   ), [question?.recentTexts, revealedTextCount, showAnswers]);
   const displayedTotalResponses = showAnswers ? revealedTotalResponses : 0;
   const showQuestionQr = Boolean(question && !showAnswers);
+  const showResultsQr = Boolean(showAnswers && resultsQrEnabled);
   const hideHeaderChrome = projectorMode;
   const projectorHeaderQuestion = projectorMode ? question : null;
   const qrCodeUrl = joinUrl
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&data=${encodeURIComponent(joinUrl)}`
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&data=${encodeURIComponent(joinUrl)}${showResultsQr && resultsQrRefreshEnabled ? `&cb=${resultsQrRefreshNonce}` : ''}`
     : '';
+
+  useEffect(() => {
+    if (!showResultsQr || !resultsQrRefreshEnabled) {
+      setResultsQrVisible(true);
+      setResultsQrRefreshNonce(0);
+      return undefined;
+    }
+
+    const intervalMs = Math.max(1, resultsQrRefreshIntervalSec) * 1000;
+    const interval = window.setInterval(() => {
+      setResultsQrVisible((currentVisible) => {
+        const nextVisible = !currentVisible;
+        if (nextVisible) {
+          setResultsQrRefreshNonce((current) => current + 1);
+        }
+        return nextVisible;
+      });
+    }, intervalMs);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [resultsQrRefreshEnabled, resultsQrRefreshIntervalSec, showResultsQr]);
 
   useEffect(() => {
     if (!question || !showAnswers) {
@@ -140,20 +172,6 @@ export function DisplayPage() {
           }`}
         >
           <div className="flex min-w-0 items-center gap-3 justify-self-start">
-            {projectorHeaderQuestion && qrCodeUrl && (
-              <div className="flex shrink-0 items-center gap-3">
-                <div className="bg-white rounded-xl p-2 shadow-2xl">
-                  <img
-                    src={qrCodeUrl}
-                    alt="填寫答案 QR Code"
-                    className="w-[88px] h-[88px] object-contain"
-                  />
-                </div>
-                <div className="hidden xl:block text-left">
-                  <p className="text-xl font-bold uppercase tracking-[0.2em] text-green-300/85 2xl:text-2xl">填寫答案</p>
-                </div>
-              </div>
-            )}
             <div className={`flex min-w-0 items-center gap-3 ${hideHeaderChrome ? 'opacity-0 pointer-events-none' : ''}`}>
               <span className="hidden xl:inline text-gray-400 text-sm font-medium">PreEvent Live</span>
               <div className="flex items-center gap-2">
@@ -172,12 +190,6 @@ export function DisplayPage() {
             ) : null}
           </div>
           <div className="flex min-w-0 flex-col items-end gap-2 justify-self-end text-right">
-            {projectorHeaderQuestion && (
-              <div className="inline-flex items-center gap-3 text-lg font-bold uppercase tracking-[0.2em] text-green-300/85 2xl:text-xl">
-                <span className="h-3 w-3 rounded-full bg-green-400 animate-pulse" />
-                掃描 QR CODE 作答
-              </div>
-            )}
             <div className={`flex max-w-full items-center gap-3 ${hideHeaderChrome ? 'opacity-0 pointer-events-none' : ''}`}>
               <span className="truncate text-gray-500 text-xs font-mono">{sessionId}</span>
               {!projectorMode ? (
@@ -217,6 +229,20 @@ export function DisplayPage() {
               離開投影
             </button>
           )}
+        </div>
+      )}
+      {showResultsQr && qrCodeUrl && (
+        <div
+          aria-hidden={!resultsQrVisible}
+          className={`fixed bottom-6 right-6 z-50 rounded-xl bg-white p-2 transition-[opacity,transform] duration-700 ease-in-out ${
+            resultsQrVisible ? 'opacity-100 scale-100' : 'pointer-events-none opacity-0 scale-95'
+          }`}
+        >
+          <img
+            src={qrCodeUrl}
+            alt="填寫答案 QR Code"
+            className="w-[min(12vw,176px)] h-[min(12vw,176px)] object-contain"
+          />
         </div>
       )}
 

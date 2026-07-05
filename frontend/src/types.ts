@@ -30,6 +30,9 @@ export interface Session {
   sessionId: string;
   name: string;
   displayMode?: 'question' | 'results';
+  resultsQrEnabled?: boolean;
+  resultsQrRefreshEnabled?: boolean;
+  resultsQrRefreshIntervalSec?: number;
 }
 
 export interface LiveQuestion {

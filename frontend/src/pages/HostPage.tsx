@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { listQuestions, createQuestion, updateQuestion, updateQuestionStatus, getSession, seedAnswers, deleteQuestion, clearQuestionAnswers, resetSessionAnswers, updateSessionName, setDisplayMode, runQuestionLoadTest } from '../api/client';
+import { listQuestions, createQuestion, updateQuestion, updateQuestionStatus, getSession, seedAnswers, deleteQuestion, clearQuestionAnswers, resetSessionAnswers, updateSessionName, setDisplayMode, setProjectionResultsQrEnabled, setProjectionResultsQrRefreshSettings, runQuestionLoadTest } from '../api/client';
 import { QuestionEditor } from '../components/QuestionEditor';
 import { ResultChart } from '../components/ResultChart';
 import { updateStoredSessionName } from './HomePage';
@@ -84,6 +84,9 @@ export function HostPage() {
   const [deletingQuestionId, setDeletingQuestionId] = useState<string | null>(null);
   const [resettingSession, setResettingSession] = useState(false);
   const [displayModeUpdating, setDisplayModeUpdating] = useState(false);
+  const [resultsQrUpdating, setResultsQrUpdating] = useState(false);
+  const [resultsQrRefreshUpdating, setResultsQrRefreshUpdating] = useState(false);
+  const [resultsQrRefreshIntervalDraft, setResultsQrRefreshIntervalDraft] = useState('5');
   const [loadTestingQuestionId, setLoadTestingQuestionId] = useState<string | null>(null);
   const [statusUpdatingQuestionId, setStatusUpdatingQuestionId] = useState<string | null>(null);
   const [isHostMenuOpen, setIsHostMenuOpen] = useState(false);
@@ -108,6 +111,7 @@ export function HostPage() {
       ]);
       setSession(sessionData);
       updateStoredSessionName(sessionId, sessionData.name);
+      setResultsQrRefreshIntervalDraft(String(sessionData.resultsQrRefreshIntervalSec ?? 5));
       setQuestions(questionsData.questions);
       setError(null);
     } catch (err) {
@@ -261,6 +265,48 @@ export function HostPage() {
       alert(err instanceof Error ? err.message : '切換投影顯示失敗');
     } finally {
       setDisplayModeUpdating(false);
+    }
+  }
+
+  async function handleSetProjectionResultsQrEnabled(resultsQrEnabled: boolean) {
+    if (!sessionId || !hostToken) return;
+    setResultsQrUpdating(true);
+    try {
+      await setProjectionResultsQrEnabled(sessionId, hostToken, resultsQrEnabled);
+      await fetchQuestions();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '切換結果頁 QR 顯示失敗');
+    } finally {
+      setResultsQrUpdating(false);
+    }
+  }
+
+  async function handleSetProjectionResultsQrRefreshEnabled(resultsQrRefreshEnabled: boolean) {
+    if (!sessionId || !hostToken) return;
+    setResultsQrRefreshUpdating(true);
+    try {
+      await setProjectionResultsQrRefreshSettings(sessionId, hostToken, { resultsQrRefreshEnabled });
+      await fetchQuestions();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '切換刷新失敗');
+    } finally {
+      setResultsQrRefreshUpdating(false);
+    }
+  }
+
+  async function handleSaveProjectionResultsQrRefreshInterval() {
+    if (!sessionId || !hostToken) return;
+    const rawValue = Number(resultsQrRefreshIntervalDraft);
+    const nextInterval = Math.max(1, Math.min(60, Number.isFinite(rawValue) ? Math.round(rawValue) : 5));
+    setResultsQrRefreshUpdating(true);
+    try {
+      await setProjectionResultsQrRefreshSettings(sessionId, hostToken, { resultsQrRefreshIntervalSec: nextInterval });
+      setResultsQrRefreshIntervalDraft(String(nextInterval));
+      await fetchQuestions();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '更新刷新秒數失敗');
+    } finally {
+      setResultsQrRefreshUpdating(false);
     }
   }
 
@@ -487,6 +533,9 @@ export function HostPage() {
   const displayUrl = `${window.location.origin}/display/${sessionId}`;
   const openQuestion = questions.find((q) => q.status === 'OPEN') ?? null;
   const projectionDisplayMode = session?.displayMode ?? openQuestion?.displayMode ?? 'question';
+  const projectionResultsQrEnabled = session?.resultsQrEnabled ?? false;
+  const projectionResultsQrRefreshEnabled = session?.resultsQrRefreshEnabled ?? true;
+  const projectionResultsQrRefreshIntervalSec = session?.resultsQrRefreshIntervalSec ?? 5;
 
   if (loading) {
     return (
@@ -629,7 +678,7 @@ export function HostPage() {
                         onChange={() => handleSetProjectionDisplayMode('question')}
                         className="h-5 w-5 border-gray-300 text-gray-900 focus:ring-gray-900"
                       />
-                      顯示 QR Code
+                      題目
                     </label>
                     <label className="flex cursor-pointer items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50">
                       <input
@@ -643,6 +692,46 @@ export function HostPage() {
                       顯示答案
                     </label>
                   </fieldset>
+                  <label className="flex cursor-pointer items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50">
+                    <input
+                      type="checkbox"
+                      checked={projectionResultsQrEnabled}
+                      onChange={(e) => handleSetProjectionResultsQrEnabled(e.target.checked)}
+                      disabled={resultsQrUpdating}
+                      className="h-5 w-5 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+                    />
+                    是否開啟右下角 QR Code
+                  </label>
+                  {projectionResultsQrEnabled && (
+                    <div className="flex flex-wrap items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-sm font-medium text-gray-700">
+                      <label className="inline-flex cursor-pointer items-center gap-2 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50">
+                        <input
+                          type="checkbox"
+                          checked={projectionResultsQrRefreshEnabled}
+                          onChange={(e) => handleSetProjectionResultsQrRefreshEnabled(e.target.checked)}
+                          disabled={resultsQrRefreshUpdating}
+                          className="h-5 w-5 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+                        />
+                        是否開啟刷新
+                      </label>
+                      {projectionResultsQrRefreshEnabled && (
+                        <>
+                          <span className="text-gray-500">每</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={60}
+                            value={resultsQrRefreshIntervalDraft}
+                            onChange={(e) => setResultsQrRefreshIntervalDraft(e.target.value)}
+                            onBlur={handleSaveProjectionResultsQrRefreshInterval}
+                            disabled={resultsQrRefreshUpdating}
+                            className="h-9 w-20 rounded-md border border-gray-300 bg-white px-2 text-right text-sm text-gray-900 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                          />
+                          <span className="text-gray-500">秒刷新</span>
+                        </>
+                      )}
+                    </div>
+                  )}
               </section>
             </div>
           </div>
@@ -827,18 +916,24 @@ export function HostPage() {
                             placeholder="We Are One"
                           />
                         </label>
-                        <button
-                          type="button"
-                          onClick={() => handleToggleSpotlightSlogan(q)}
-                          disabled={spotlightSloganUpdatingQuestionId === q.questionId}
-                          className="h-9 rounded-md bg-[#4F46E5] px-3 text-sm font-semibold text-white shadow-sm hover:bg-[#4338CA] disabled:bg-indigo-300"
-                        >
-                          {spotlightSloganUpdatingQuestionId === q.questionId
-                            ? '更新中...'
-                            : q.spotlightSloganVisible
-                              ? '隱藏標語'
-                              : '顯示標語'}
-                        </button>
+                        <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-gray-200 bg-white px-3 text-sm font-semibold text-gray-700 shadow-sm has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50">
+                          <input
+                            type="checkbox"
+                            className="peer sr-only"
+                            checked={q.spotlightSloganVisible ?? false}
+                            disabled={spotlightSloganUpdatingQuestionId === q.questionId}
+                            onChange={() => handleToggleSpotlightSlogan(q)}
+                            aria-label={q.spotlightSloganVisible ? '隱藏標語' : '顯示標語'}
+                          />
+                          <span className="relative inline-flex h-5 w-9 shrink-0 rounded-full bg-[#9CA3AF] transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-[#16A34A] peer-checked:after:translate-x-4 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-gray-900" />
+                          <span>
+                            {spotlightSloganUpdatingQuestionId === q.questionId
+                              ? '更新中...'
+                              : q.spotlightSloganVisible
+                                ? '顯示中'
+                                : '已關閉'}
+                          </span>
+                        </label>
                       </div>
                     </div>
                   )}
