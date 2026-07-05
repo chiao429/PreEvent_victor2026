@@ -535,7 +535,6 @@ export function HostPage() {
   const projectionDisplayMode = session?.displayMode ?? openQuestion?.displayMode ?? 'question';
   const projectionResultsQrEnabled = session?.resultsQrEnabled ?? false;
   const projectionResultsQrRefreshEnabled = session?.resultsQrRefreshEnabled ?? true;
-  const projectionResultsQrRefreshIntervalSec = session?.resultsQrRefreshIntervalSec ?? 5;
 
   if (loading) {
     return (
