@@ -28,4 +28,8 @@ export interface AnswerDocument {
 export interface SessionDocument {
   name: string;
   hostToken: string;
+  displayMode?: 'question' | 'results';
+  resultsQrEnabled?: boolean;
+  resultsQrRefreshEnabled?: boolean;
+  resultsQrRefreshIntervalSec?: number;
 }

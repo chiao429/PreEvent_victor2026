@@ -442,6 +442,7 @@ questionRouter.patch('/:id/questions/:qid', requireHostToken, async (req: Reques
       res.status(404).json({ error: 'Question not found' });
       return;
     }
+    const data = questionDoc.data()!;
 
     if (status === 'OPEN') {
       // 先關閉其他已開啟的題目，確保同時只有一題是 OPEN
@@ -456,7 +457,11 @@ questionRouter.patch('/:id/questions/:qid', requireHostToken, async (req: Reques
           batch.update(doc.ref, { status: 'CLOSED' });
         }
       });
-      batch.update(questionRef, { status, displayMode: 'question' });
+      const updates: Record<string, unknown> = { status, displayMode: 'question' };
+      if (normalizeScene(data.type as QuestionType, data.displayScene as string | undefined) === 'word-cloud') {
+        updates.wordCloudRefreshPaused = false;
+      }
+      batch.update(questionRef, updates);
       batch.set(sessionRef.collection('_ctrl').doc('display'), { displayMode: 'question' }, { merge: true });
       batch.update(sessionRef, { displayMode: 'question' });
       await batch.commit();

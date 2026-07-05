@@ -119,18 +119,26 @@ sessionRouter.post('/', async (req: Request, res: Response): Promise<void> => {
 
 sessionRouter.get('/:id', async (req: Request, res: Response): Promise<void> => {
   try {
-    const doc = await db.collection('sessions').doc(req.params.id).get();
+    const sessionRef = db.collection('sessions').doc(req.params.id);
+    const [doc, ctrlDoc] = await Promise.all([
+      sessionRef.get(),
+      sessionRef.collection('_ctrl').doc('display').get(),
+    ]);
     if (!doc.exists) {
       res.status(404).json({ error: 'Session not found' });
       return;
     }
 
     const data = doc.data()!;
+    const ctrlData = ctrlDoc.data() ?? {};
     res.json({
       sessionId: req.params.id,
       name: data.name,
       createdAt: data.createdAt,
       displayMode: (data.displayMode as string) ?? 'results',
+      resultsQrEnabled: (ctrlData.resultsQrEnabled as boolean | undefined) ?? true,
+      resultsQrRefreshEnabled: (ctrlData.resultsQrRefreshEnabled as boolean | undefined) ?? true,
+      resultsQrRefreshIntervalSec: (ctrlData.resultsQrRefreshIntervalSec as number | undefined) ?? 5,
     });
   } catch (err) {
     console.error('[sessions] get error:', err);
@@ -141,7 +149,14 @@ sessionRouter.get('/:id', async (req: Request, res: Response): Promise<void> => 
 const patchSessionSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
   displayMode: z.enum(['question', 'results']).optional(),
-}).refine((data) => data.name !== undefined || data.displayMode !== undefined, {
+  resultsQrEnabled: z.boolean().optional(),
+  resultsQrRefreshEnabled: z.boolean().optional(),
+  resultsQrRefreshIntervalSec: z.number().int().min(1).max(60).optional(),
+}).refine((data) => data.name !== undefined
+  || data.displayMode !== undefined
+  || data.resultsQrEnabled !== undefined
+  || data.resultsQrRefreshEnabled !== undefined
+  || data.resultsQrRefreshIntervalSec !== undefined, {
   message: 'At least one field is required',
 });
 
@@ -186,10 +201,28 @@ sessionRouter.patch('/:id', requireHostToken, async (req: Request, res: Response
       await batch.commit();
     }
 
+    if (parsed.data.resultsQrEnabled !== undefined) {
+      await sessionRef
+        .collection('_ctrl').doc('display')
+        .set({ resultsQrEnabled: parsed.data.resultsQrEnabled }, { merge: true });
+    }
+
+    if (parsed.data.resultsQrRefreshEnabled !== undefined || parsed.data.resultsQrRefreshIntervalSec !== undefined) {
+      await sessionRef
+        .collection('_ctrl').doc('display')
+        .set({
+          ...(parsed.data.resultsQrRefreshEnabled !== undefined ? { resultsQrRefreshEnabled: parsed.data.resultsQrRefreshEnabled } : {}),
+          ...(parsed.data.resultsQrRefreshIntervalSec !== undefined ? { resultsQrRefreshIntervalSec: parsed.data.resultsQrRefreshIntervalSec } : {}),
+        }, { merge: true });
+    }
+
     res.json({
       sessionId: req.params.id,
       ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
       ...(parsed.data.displayMode !== undefined ? { displayMode: parsed.data.displayMode } : {}),
+      ...(parsed.data.resultsQrEnabled !== undefined ? { resultsQrEnabled: parsed.data.resultsQrEnabled } : {}),
+      ...(parsed.data.resultsQrRefreshEnabled !== undefined ? { resultsQrRefreshEnabled: parsed.data.resultsQrRefreshEnabled } : {}),
+      ...(parsed.data.resultsQrRefreshIntervalSec !== undefined ? { resultsQrRefreshIntervalSec: parsed.data.resultsQrRefreshIntervalSec } : {}),
     });
   } catch (err) {
     console.error('[sessions] patch error:', err);
