@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { getCurrentQuestion, submitAnswer, getSession } from '../api/client';
 import { AnswerForm } from '../components/AnswerForm';
@@ -46,6 +46,7 @@ export function JoinPage() {
     sessionId ? getAnsweredQuestions(sessionId, respondentId) : []
   ));
   const [loading, setLoading] = useState(true);
+  const submittingQuestionIdRef = useRef<string | null>(null);
 
   // Fetch session info once
   useEffect(() => {
@@ -86,18 +87,24 @@ export function JoinPage() {
     textValue?: string;
   }) {
     if (!sessionId || !question) return;
+    if (submittingQuestionIdRef.current === question.questionId) return;
+    submittingQuestionIdRef.current = question.questionId;
     try {
-      await submitAnswer(sessionId, question.questionId, {
-        respondentId,
-        ...answer,
-      });
-    } catch (err) {
-      if (!(err instanceof Error) || err.message !== 'Already answered') {
-        throw err;
+      try {
+        await submitAnswer(sessionId, question.questionId, {
+          respondentId,
+          ...answer,
+        });
+      } catch (err) {
+        if (!(err instanceof Error) || err.message !== 'Already answered') {
+          throw err;
+        }
       }
+      saveAnsweredQuestion(sessionId, respondentId, question.questionId);
+      setAnsweredQuestionIds(getAnsweredQuestions(sessionId, respondentId));
+    } finally {
+      submittingQuestionIdRef.current = null;
     }
-    saveAnsweredQuestion(sessionId, respondentId, question.questionId);
-    setAnsweredQuestionIds(getAnsweredQuestions(sessionId, respondentId));
   }
 
   return (

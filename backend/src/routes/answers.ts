@@ -22,6 +22,32 @@ const seedAnswersSchema = z.object({
 });
 
 const LOAD_TEST_ANSWER_COUNT = 500;
+const LOAD_TEST_BATCH_SIZE = 100;
+const LOAD_TEST_BATCH_INTERVAL_MS = 1000;
+
+async function postLoadTestAnswer(
+  sessionId: string,
+  questionId: string,
+  payload: {
+    respondentId: string;
+    optionId?: string;
+    optionIds?: string[];
+    textValue?: string;
+  },
+): Promise<{ status: number; error?: string }> {
+  const baseUrl = `http://127.0.0.1:${process.env.PORT ?? 8080}`;
+  const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/questions/${questionId}/answers`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  return {
+    status: response.status,
+    error: (data as { error?: string }).error,
+  };
+}
 const MAX_RECENT_TEXTS = 400;
 
 // POST /api/sessions/:id/questions/:qid/answers — 觀眾送出答案
@@ -193,60 +219,73 @@ answerRouter.post(
         return;
       }
 
-      const batch = db.batch();
-      const optionCounts: Record<string, number> = {};
-      const recentTexts: string[] = [];
+      let successCount = 0;
+      let rateLimitedCount = 0;
+      let otherFailureCount = 0;
+      const failureSamples: Array<{ index: number; status: number; error?: string }> = [];
 
-      for (let index = 0; index < LOAD_TEST_ANSWER_COUNT; index += 1) {
-        const answerRef = questionRef.collection('answers').doc(uuidv4());
-        if (type === 'TEXT') {
-          const textValue = `壓測回答 ${index + 1}`;
-          batch.set(answerRef, {
-            textValue,
-            createdAt: FieldValue.serverTimestamp(),
-            loadTest: true,
+      for (let start = 0; start < LOAD_TEST_ANSWER_COUNT; start += LOAD_TEST_BATCH_SIZE) {
+        const batchStartTime = Date.now();
+        const batchPromises = Array.from(
+          { length: Math.min(LOAD_TEST_BATCH_SIZE, LOAD_TEST_ANSWER_COUNT - start) },
+          async (_unused, offset) => {
+            const index = start + offset;
+            const respondentId = uuidv4();
+            const payload: {
+              respondentId: string;
+              optionId?: string;
+              optionIds?: string[];
+              textValue?: string;
+            } = { respondentId };
+
+            if (type === 'TEXT') {
+              payload.textValue = `壓測回答 ${index + 1}`;
+            } else if (type === 'SINGLE_CHOICE') {
+              payload.optionId = options[index % options.length].id;
+            } else if (type === 'MULTI_CHOICE') {
+              const shuffled = [...options].sort(() => Math.random() - 0.5);
+              payload.optionIds = shuffled
+                .slice(0, Math.min(options.length, 1 + (index % 3)))
+                .map((option) => option.id);
+            } else {
+              throw Object.assign(new Error('Unknown question type'), { code: 400 });
+            }
+
+            const result = await postLoadTestAnswer(sessionId, questionId, payload);
+            if (result.status >= 200 && result.status < 300) {
+              successCount += 1;
+            } else if (result.status === 429) {
+              rateLimitedCount += 1;
+              if (failureSamples.length < 5) {
+                failureSamples.push({ index: index + 1, status: result.status, error: result.error });
+              }
+            } else {
+              otherFailureCount += 1;
+              if (failureSamples.length < 5) {
+                failureSamples.push({ index: index + 1, status: result.status, error: result.error });
+              }
+            }
+          },
+        );
+
+        await Promise.allSettled(batchPromises);
+
+        const elapsed = Date.now() - batchStartTime;
+        if (elapsed < LOAD_TEST_BATCH_INTERVAL_MS && start + LOAD_TEST_BATCH_SIZE < LOAD_TEST_ANSWER_COUNT) {
+          await new Promise((resolve) => {
+            setTimeout(resolve, LOAD_TEST_BATCH_INTERVAL_MS - elapsed);
           });
-          recentTexts.push(textValue);
-        } else if (type === 'SINGLE_CHOICE') {
-          const option = options[index % options.length];
-          batch.set(answerRef, {
-            optionId: option.id,
-            createdAt: FieldValue.serverTimestamp(),
-            loadTest: true,
-          });
-          optionCounts[option.id] = (optionCounts[option.id] ?? 0) + 1;
-        } else if (type === 'MULTI_CHOICE') {
-          const shuffled = [...options].sort(() => Math.random() - 0.5);
-          const selected = shuffled.slice(0, Math.min(options.length, 1 + (index % 3))).map((option) => option.id);
-          batch.set(answerRef, {
-            optionIds: selected,
-            createdAt: FieldValue.serverTimestamp(),
-            loadTest: true,
-          });
-          selected.forEach((optionId) => {
-            optionCounts[optionId] = (optionCounts[optionId] ?? 0) + 1;
-          });
-        } else {
-          res.status(400).json({ error: 'Unknown question type' });
-          return;
         }
       }
 
-      await batch.commit();
-
-      const updates: Record<string, unknown> = {
-        totalResponses: FieldValue.increment(LOAD_TEST_ANSWER_COUNT),
-      };
-      Object.entries(optionCounts).forEach(([optionId, count]) => {
-        updates[`optionCounts.${optionId}`] = FieldValue.increment(count);
+      res.json({
+        success: true,
+        attempted: LOAD_TEST_ANSWER_COUNT,
+        successCount,
+        rateLimitedCount,
+        otherFailureCount,
+        failureSamples,
       });
-      if (recentTexts.length > 0) {
-        const existingTexts = (questionData.recentTexts ?? []) as string[];
-        updates.recentTexts = [...existingTexts, ...recentTexts].slice(-MAX_RECENT_TEXTS);
-      }
-      await questionRef.update(updates);
-
-      res.json({ success: true, inserted: LOAD_TEST_ANSWER_COUNT });
     } catch (err) {
       console.error('[answers] load test error:', err);
       res.status(500).json({ error: 'Internal server error' });

@@ -25,6 +25,12 @@ export function DisplayPage() {
   const [revealedTotalResponses, setRevealedTotalResponses] = useState(0);
   const [revealedTextCount, setRevealedTextCount] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const revealTargetsRef = useRef({
+    optionCounts: {} as Record<string, number>,
+    totalResponses: 0,
+    recentTextCount: 0,
+  });
+  const latestOptionsRef = useRef(question?.options ?? []);
   const joinUrl = sessionId ? `${window.location.origin}/join/${sessionId}` : '';
 
   const handleFullscreenChange = useCallback(() => {
@@ -76,15 +82,6 @@ export function DisplayPage() {
   const isMapHudScene = question?.type !== 'TEXT' && derivedScene === 'map3d-hud';
   const showAnswers = question?.displayMode === 'results';
   const textRevealStep = isWordCloudScene ? 12 : 1;
-  const revealTargetSignature = useMemo(() => {
-    if (!question || !showAnswers) return '';
-    return JSON.stringify({
-      id: question.id,
-      options: question.options.map((option) => [option.id, option.count]),
-      recentTexts: question.recentTexts.length,
-      totalResponses: question.totalResponses,
-    });
-  }, [question, showAnswers]);
   const displayedOptions = useMemo(() => (
     question?.options.map((option) => ({
       ...option,
@@ -128,11 +125,24 @@ export function DisplayPage() {
 
   useEffect(() => {
     if (!question || !showAnswers) {
+      revealTargetsRef.current = {
+        optionCounts: {},
+        totalResponses: 0,
+        recentTextCount: 0,
+      };
+      latestOptionsRef.current = [];
       setRevealedCounts({});
       setRevealedTotalResponses(0);
       setRevealedTextCount(0);
-      return undefined;
+      return;
     }
+
+    latestOptionsRef.current = question.options;
+    revealTargetsRef.current = {
+      optionCounts: Object.fromEntries(question.options.map((option) => [option.id, option.count])),
+      totalResponses: question.totalResponses,
+      recentTextCount: question.recentTexts.length,
+    };
 
     setRevealedCounts((current) => {
       const next: Record<string, number> = {};
@@ -143,22 +153,29 @@ export function DisplayPage() {
     });
     setRevealedTotalResponses((current) => Math.min(current, question.totalResponses));
     setRevealedTextCount((current) => Math.min(current, question.recentTexts.length));
+  }, [question, showAnswers]);
+
+  useEffect(() => {
+    if (!question || !showAnswers) return undefined;
 
     const interval = window.setInterval(() => {
+      const targets = revealTargetsRef.current;
+      const currentOptions = latestOptionsRef.current;
+
       setRevealedCounts((current) => {
         const next = { ...current };
-        const target = question.options.find((option) => (next[option.id] ?? 0) < option.count);
+        const target = currentOptions.find((option) => (next[option.id] ?? 0) < (targets.optionCounts[option.id] ?? 0));
         if (target) {
           next[target.id] = (next[target.id] ?? 0) + 1;
         }
         return next;
       });
-      setRevealedTotalResponses((current) => Math.min(current + 1, question.totalResponses));
-      setRevealedTextCount((current) => Math.min(current + textRevealStep, question.recentTexts.length));
+      setRevealedTotalResponses((current) => Math.min(current + 1, targets.totalResponses));
+      setRevealedTextCount((current) => Math.min(current + textRevealStep, targets.recentTextCount));
     }, 180);
 
     return () => window.clearInterval(interval);
-  }, [question, revealTargetSignature, showAnswers, textRevealStep]);
+  }, [question?.id, showAnswers, textRevealStep]);
 
   return (
     <div

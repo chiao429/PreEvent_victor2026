@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { listQuestions, createQuestion, updateQuestion, updateQuestionStatus, getSession, seedAnswers, deleteQuestion, clearQuestionAnswers, resetSessionAnswers, updateSessionName, setDisplayMode, setProjectionResultsQrEnabled, setProjectionResultsQrRefreshSettings, runQuestionLoadTest } from '../api/client';
+import { listQuestions, createQuestion, updateQuestion, updateQuestionStatus, getSession, submitAnswer, deleteQuestion, clearQuestionAnswers, resetSessionAnswers, updateSessionName, setDisplayMode, setProjectionResultsQrEnabled, setProjectionResultsQrRefreshSettings, runQuestionLoadTest } from '../api/client';
 import { QuestionEditor } from '../components/QuestionEditor';
 import { ResultChart } from '../components/ResultChart';
 import { updateStoredSessionName } from './HomePage';
@@ -37,7 +37,11 @@ const SCENE_BADGE_CLASS: Record<string, string> = {
 };
 
 const MAX_TEXT_SEED_COUNT = 500;
-const TEXT_SEED_BATCH_SIZE = 50;
+const SEED_SUBMIT_INTERVAL_MS = 3000;
+
+type AnswerJson = {
+  traits?: Array<{ trait?: string; word?: string }>;
+};
 
 function randomInt(min: number, max: number) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -50,6 +54,28 @@ function shuffleArray<T>(items: T[]): T[] {
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
   return shuffled;
+}
+
+async function loadRandomTextAnswers(count: number): Promise<string[]> {
+  const res = await fetch('/answer.json');
+  if (!res.ok) {
+    throw new Error('讀取 answer.json 失敗');
+  }
+
+  const data = await res.json() as AnswerJson;
+  const words = (data.traits ?? [])
+    .map((trait) => (trait.trait ?? trait.word)?.trim())
+    .filter((word): word is string => Boolean(word));
+
+  if (words.length === 0) {
+    throw new Error('answer.json 沒有可用答案');
+  }
+
+  const result: string[] = [];
+  while (result.length < count) {
+    result.push(...shuffleArray(words));
+  }
+  return result.slice(0, count);
 }
 
 export function HostPage() {
@@ -428,7 +454,7 @@ export function HostPage() {
     }
   }
 
-  function buildSeedPayloads(): { payloads: { textAnswers?: string[]; optionCounts?: Record<string, number> }[]; error?: string } {
+  async function buildSeedPayloads(): Promise<{ payloads: { textAnswers?: string[]; optionCounts?: Record<string, number> }[]; error?: string }> {
     if (!seedTarget) return { payloads: [] };
     if (seedTarget.type === 'TEXT') {
       const count = Math.round(Number(seedTextCount) || 0);
@@ -438,12 +464,10 @@ export function HostPage() {
       if (count > MAX_TEXT_SEED_COUNT) {
         return { payloads: [], error: `一次最多 ${MAX_TEXT_SEED_COUNT} 筆文字測試資料` };
       }
-      const textAnswers = Array.from({ length: count }, (_, index) => `資料${index + 1}`);
-      const payloads: { textAnswers: string[] }[] = [];
-      for (let index = 0; index < textAnswers.length; index += TEXT_SEED_BATCH_SIZE) {
-        payloads.push({ textAnswers: textAnswers.slice(index, index + TEXT_SEED_BATCH_SIZE) });
-      }
-      return { payloads };
+      const textAnswers = await loadRandomTextAnswers(count);
+      return {
+        payloads: textAnswers.map((text) => ({ textAnswers: [text] })),
+      };
     }
 
     const payloads: { optionCounts: Record<string, number> }[] = [];
@@ -495,7 +519,7 @@ export function HostPage() {
   async function handleSeedSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!sessionId || !hostToken || !seedTarget) return;
-    const { payloads, error: payloadError } = buildSeedPayloads();
+    const { payloads, error: payloadError } = await buildSeedPayloads();
     if (payloadError) {
       setSeedError(payloadError);
       return;
@@ -505,9 +529,24 @@ export function HostPage() {
     setSeedProgress({ done: 0, total: payloads.length });
     try {
       for (let i = 0; i < payloads.length; i += 1) {
-        await seedAnswers(sessionId, seedTarget.questionId, hostToken, payloads[i]);
+        const payload = payloads[i];
+        const respondentId = crypto.randomUUID();
+        if (seedTarget.type === 'TEXT') {
+          await submitAnswer(sessionId, seedTarget.questionId, {
+            respondentId,
+            textValue: payload.textAnswers?.[0] ?? `資料${i + 1}`,
+          });
+        } else {
+          const optionId = Object.keys(payload.optionCounts ?? {})[0];
+          await submitAnswer(sessionId, seedTarget.questionId, {
+            respondentId,
+            ...(seedTarget.type === 'SINGLE_CHOICE' ? { optionId } : { optionIds: [optionId] }),
+          });
+        }
         setSeedProgress({ done: i + 1, total: payloads.length });
-        await wait(300);
+        if (i < payloads.length - 1) {
+          await wait(SEED_SUBMIT_INTERVAL_MS);
+        }
       }
       setSeedTarget(null);
       setSeedTextCount(50);
@@ -1142,16 +1181,10 @@ export function HostPage() {
                       onChange={(e) => setSeedTextCount(Number(e.target.value))}
                       className="w-full rounded-md border border-gray-200 px-3 py-2 text-right focus:border-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-100"
                     />
-                  </label>
-                  <div className="rounded-xl bg-gray-50 border border-gray-100 px-3 py-2 text-sm text-gray-500">
-                    會灌入 <span className="font-semibold text-gray-700">資料1</span>
-                    {seedTextCount > 1 && (
-                      <>
-                        {' '}到 <span className="font-semibold text-gray-700">資料{Math.max(1, Math.round(Number(seedTextCount) || 1))}</span>
-                      </>
-                    )}
-                    ，最多 {MAX_TEXT_SEED_COUNT} 筆。
-                  </div>
+	                  </label>
+	                  <div className="rounded-xl bg-gray-50 border border-gray-100 px-3 py-2 text-sm text-gray-500">
+	                    會從 answer.json 隨機抽取 50 個詞作為答案來源，每 3 秒送出 1 筆，最多 {MAX_TEXT_SEED_COUNT} 筆。
+	                  </div>
                   <button
                     type="button"
                     onClick={handleRandomSeed}

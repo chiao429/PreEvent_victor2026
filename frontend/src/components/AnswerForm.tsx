@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { Question } from '../types';
 
 interface Props {
@@ -17,6 +17,7 @@ export function AnswerForm({ question, onSubmit, disabled = false }: Props) {
   const [textValue, setTextValue] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const submitLockRef = useRef(false);
 
   function toggleMultiOption(optionId: string) {
     setSelectedOptions((prev) =>
@@ -26,6 +27,8 @@ export function AnswerForm({ question, onSubmit, disabled = false }: Props) {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (submitLockRef.current) return;
+
     setError(null);
 
     if (question.type === 'SINGLE_CHOICE' && !selectedOption) {
@@ -41,6 +44,7 @@ export function AnswerForm({ question, onSubmit, disabled = false }: Props) {
       return;
     }
 
+    submitLockRef.current = true;
     setSubmitting(true);
     try {
       if (question.type === 'SINGLE_CHOICE') {
@@ -51,8 +55,12 @@ export function AnswerForm({ question, onSubmit, disabled = false }: Props) {
         await onSubmit({ textValue: textValue.trim() });
       }
     } catch (err) {
+      if (err instanceof Error && err.message === 'Too many requests, please try again later.') {
+        console.log('Too many requests, please try again later.');
+      }
       setError(err instanceof Error ? err.message : '送出失敗，請重試');
     } finally {
+      submitLockRef.current = false;
       setSubmitting(false);
     }
   }

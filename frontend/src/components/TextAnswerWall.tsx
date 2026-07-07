@@ -28,12 +28,28 @@ let keyCounter = 0;
 export function TextAnswerWall({ texts, totalResponses }: Props) {
   const [cards, setCards] = useState<AnimatedText[]>([]);
   const prevTextsRef = useRef<string[]>([]);
+  const lastAppendCountRef = useRef(0);
 
   useEffect(() => {
     const prev = prevTextsRef.current;
-    const newTexts = texts.filter((_, i) => i >= prev.length);
+    if (texts.length === 0) {
+      prevTextsRef.current = [];
+      lastAppendCountRef.current = 0;
+      setCards([]);
+      return;
+    }
+
+    if (texts.length < prev.length) {
+      prevTextsRef.current = texts;
+      lastAppendCountRef.current = 0;
+      setCards([]);
+      return;
+    }
+
+    const newTexts = texts.slice(prev.length);
 
     if (newTexts.length > 0) {
+      lastAppendCountRef.current = newTexts.length;
       setCards((prevCards) => {
         const incoming = newTexts.map((text, i) => ({
           text,
@@ -45,36 +61,20 @@ export function TextAnswerWall({ texts, totalResponses }: Props) {
         return updated;
       });
 
-      // Trigger fade-in on next tick
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          setCards((prev) => prev.map((c) => ({ ...c, visible: true })));
+          setCards((prev) => {
+            const visibleFrom = Math.max(0, prev.length - lastAppendCountRef.current);
+            return prev.map((card, index) => (
+              index >= visibleFrom ? { ...card, visible: true } : card
+            ));
+          });
         });
       });
     }
 
     prevTextsRef.current = texts;
   }, [texts]);
-
-  // Initial load: show all existing with animation
-  useEffect(() => {
-    if (texts.length > 0 && cards.length === 0) {
-      const initial = texts.map((text, i) => ({
-        text,
-        key: keyCounter++,
-        colorClass: CARD_COLORS[i % CARD_COLORS.length],
-        visible: false,
-      }));
-      setCards(initial);
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          setCards((prev) => prev.map((c) => ({ ...c, visible: true })));
-        });
-      });
-      prevTextsRef.current = texts;
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   return (
     <div className="w-full">

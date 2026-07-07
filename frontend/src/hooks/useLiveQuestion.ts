@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebaseClient';
 import type { LiveQuestion, QuestionOption } from '../types';
@@ -15,6 +15,18 @@ export function useLiveQuestion(sessionId: string): UseLiveQuestionResult {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const [connected, setConnected] = useState(false);
+  const pendingQuestionRef = useRef<LiveQuestion | null>(null);
+  const flushTimerRef = useRef<number | null>(null);
+
+  function scheduleQuestionUpdate(nextQuestion: LiveQuestion | null) {
+    pendingQuestionRef.current = nextQuestion;
+    if (flushTimerRef.current !== null) return;
+
+    flushTimerRef.current = window.setTimeout(() => {
+      flushTimerRef.current = null;
+      setQuestion(pendingQuestionRef.current);
+    }, 120);
+  }
 
   useEffect(() => {
     if (!sessionId) return;
@@ -32,7 +44,7 @@ export function useLiveQuestion(sessionId: string): UseLiveQuestionResult {
         setError(null);
 
         if (snapshot.empty) {
-          setQuestion(null);
+          scheduleQuestionUpdate(null);
           return;
         }
 
@@ -52,7 +64,7 @@ export function useLiveQuestion(sessionId: string): UseLiveQuestionResult {
           ? 'text-wall'
           : (rawScene as LiveQuestion['displayScene']);
 
-        setQuestion({
+        scheduleQuestionUpdate({
           id: doc.id,
           type: data['type'] as LiveQuestion['type'],
           title: data['title'] as string,
@@ -79,6 +91,10 @@ export function useLiveQuestion(sessionId: string): UseLiveQuestionResult {
 
     return () => {
       unsubscribe();
+      if (flushTimerRef.current !== null) {
+        window.clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
       setConnected(false);
     };
   }, [sessionId]);
